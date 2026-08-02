@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class JobState(StrEnum):
+    UPLOADING = "uploading"
     QUEUED = "queued"
     PREPARING = "preparing"
     RENDERING = "rendering"
@@ -56,6 +57,9 @@ class FontPreset(StrEnum):
     MODERN = "modern"
     CLASSIC = "classic"
     FRIENDLY = "friendly"
+    ELEGANT = "elegant"
+    CINEMATIC = "cinematic"
+    TYPEWRITER = "typewriter"
     LARGE_TV = "large-tv"
 
 
@@ -63,6 +67,23 @@ class TextPosition(StrEnum):
     TOP = "top"
     CENTRE = "centre"
     BOTTOM = "bottom"
+
+
+class TextAlign(StrEnum):
+    LEFT = "left"
+    CENTRE = "centre"
+    RIGHT = "right"
+
+
+class TitleMode(StrEnum):
+    CARD = "card"
+    OVERLAY = "overlay"
+    HIDDEN = "hidden"
+
+
+class TextAnimation(StrEnum):
+    NONE = "none"
+    FADE = "fade"
 
 
 RESOLUTIONS = {
@@ -83,6 +104,19 @@ class SlideshowSettings(BaseModel):
     movement: Movement = Movement.STATIC
     font: FontPreset = FontPreset.MODERN
     text_position: TextPosition = TextPosition.BOTTOM
+    title_mode: TitleMode = TitleMode.CARD
+    title_photo_index: int = Field(0, ge=0, le=99)
+    title_start: float = Field(0, ge=0, le=20)
+    title_duration: float = Field(3, ge=0.5, le=20)
+    title_size: float = Field(1.45, ge=0.6, le=2.5)
+    subtitle_size: float = Field(0.85, ge=0.5, le=1.8)
+    caption_size: float = Field(1, ge=0.5, le=2)
+    text_x: float = Field(0.5, ge=0.05, le=0.95)
+    text_y: float = Field(0.5, ge=0.05, le=0.95)
+    text_color: str = "#ffffff"
+    text_panel_opacity: int = Field(155, ge=0, le=230)
+    text_align: TextAlign = TextAlign.CENTRE
+    text_animation: TextAnimation = TextAnimation.FADE
     rotations: list[int] = Field(default_factory=list)
     captions: list[str] = Field(default_factory=list)
 
@@ -90,6 +124,16 @@ class SlideshowSettings(BaseModel):
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("text_color")
+    @classmethod
+    def valid_text_colour(cls, value: str) -> str:
+        normalised = value.lower()
+        if len(normalised) != 7 or normalised[0] != "#" or any(
+            character not in "0123456789abcdef" for character in normalised[1:]
+        ):
+            raise ValueError("text_color must be a six-digit hexadecimal colour")
+        return normalised
 
     @field_validator("rotations")
     @classmethod
@@ -127,7 +171,13 @@ class SlideshowSettings(BaseModel):
     def validate_for_count(self, count: int, max_video_seconds: int) -> None:
         if len(self.rotations) != count or len(self.captions) != count:
             raise ValueError("rotation and caption counts must match the photos")
-        title_seconds = 3 if self.title or self.subtitle else 0
+        has_title = bool(self.title or self.subtitle) and self.title_mode != TitleMode.HIDDEN
+        if has_title and self.title_mode == TitleMode.OVERLAY:
+            if self.title_photo_index >= count:
+                raise ValueError("title overlay photo must exist")
+            if self.title_start + self.title_duration > self.duration:
+                raise ValueError("title overlay timing must fit within the selected photo")
+        title_seconds = self.title_duration if has_title and self.title_mode == TitleMode.CARD else 0
         if count * self.duration + title_seconds > max_video_seconds:
             raise ValueError("slideshow would exceed the 20-minute limit")
 

@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     SLIDESHOW_DATA_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ffmpeg fonts-dejavu-core fonts-liberation gosu \
+    && apt-get install -y --no-install-recommends curl ffmpeg fonts-dejavu-core fonts-lato fonts-liberation fonts-noto-core gosu \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import shutil
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -17,9 +19,9 @@ from pydantic import ValidationError
 
 from app.cleanup import CleanupService
 from app.config import AppConfig, config
-from app.image_processing import decoded_format, has_allowed_extension
+from app.image_processing import FONT_MAP, decoded_format, has_allowed_extension
 from app.jobs import JobRepository
-from app.models import JobRecord, JobState, SlideshowSettings
+from app.models import FontPreset, JobRecord, JobState, SlideshowSettings
 from app.security import generate_access_token, generate_job_id, safe_job_path, token_digest, token_matches
 from app.worker import RenderWorker
 
@@ -81,6 +83,19 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
     application.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
+    @application.middleware("http")
+    async def request_id_header(request: Request, call_next):
+        request_id = secrets.token_hex(6)
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        if response.status_code >= 500:
+            logger.error(
+                "request_failed request_id=%s method=%s path=%s status=%s",
+                request_id, request.method, request.url.path, response.status_code,
+            )
+        return response
+
     @application.exception_handler(RequestValidationError)
     async def request_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"error": "Invalid request", "details": exc.errors()})
@@ -96,6 +111,152 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
             status_code=200 if healthy else 503,
             content={"status": "ok" if healthy else "degraded", "checks": checks},
         )
+
+    @application.get("/assets/fonts/{font_id}")
+    async def font_asset(font_id: str) -> FileResponse:
+        try:
+            preset = FontPreset(font_id)
+        except ValueError as exc:
+            raise HTTPException(404, "Font not found") from exc
+        font_path = Path(FONT_MAP[preset][0])
+        if not font_path.is_file():
+            raise HTTPException(404, "Font not available")
+        return FileResponse(
+            font_path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @application.post("/api/upload-check")
+    async def upload_check(request: Request) -> dict[str, object]:
+        maximum = 1024 * 1024
+        declared = request.headers.get("content-length")
+        if declared and int(declared) > maximum:
+            raise HTTPException(413, "Connection-check payload is too large")
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > maximum:
+                raise HTTPException(413, "Connection-check payload is too large")
+        logger.info(
+            "upload_check_ok request_id=%s bytes=%s",
+            request.state.request_id, received,
+        )
+        return {"status": "ok", "bytes_received": received, "request_id": request.state.request_id}
+
+    @application.post("/api/uploads", status_code=201)
+    async def start_upload(payload: dict[str, object], request: Request) -> JSONResponse:
+        photo_count = payload.get("photo_count")
+        raw_settings = payload.get("settings")
+        if not isinstance(photo_count, int) or isinstance(photo_count, bool):
+            raise HTTPException(422, "photo_count must be an integer")
+        if photo_count < 1 or photo_count > settings_config.max_photos:
+            raise HTTPException(413, f"A maximum of {settings_config.max_photos} photos is allowed")
+        try:
+            parsed = SlideshowSettings.model_validate(raw_settings)
+            parsed.validate_for_count(photo_count, settings_config.max_video_seconds)
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(422, f"Invalid slideshow settings: {exc}") from exc
+        job_id = generate_job_id()
+        token = generate_access_token()
+        job_dir = safe_job_path(settings_config.jobs_dir, job_id)
+        try:
+            (job_dir / "source").mkdir(parents=True, exist_ok=False)
+            repository.create(
+                job_id, token_digest(token), parsed, photo_count,
+                initial_state=JobState.UPLOADING,
+            )
+        except Exception:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
+        logger.info(
+            "upload_started job_id=%s request_id=%s photos=%s",
+            job_id, request.state.request_id, photo_count,
+        )
+        return JSONResponse(
+            status_code=201,
+            content={"job_id": job_id, "access_token": token, "state": JobState.UPLOADING},
+        )
+
+    @application.post("/api/uploads/{job_id}/files/{index}")
+    async def upload_job_file(
+        job_id: str, index: int, request: Request,
+        file: Annotated[UploadFile, File()],
+        x_job_token: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        started = time.monotonic()
+        job = authorised_job(job_id, x_job_token, None)
+        if job.state != JobState.UPLOADING:
+            raise HTTPException(409, "This upload is no longer accepting photos")
+        if index < 0 or index >= job.photo_count:
+            raise HTTPException(422, "Photo number is outside this upload")
+        if not has_allowed_extension(file.filename):
+            raise HTTPException(415, "Only JPEG, PNG, WebP, HEIC, and HEIF photos are accepted")
+        source_dir = safe_job_path(settings_config.jobs_dir, job_id) / "source"
+        target = source_dir / f"{index:03d}.upload"
+        if target.is_file():
+            return {
+                "status": "already_received", "index": index,
+                "bytes": target.stat().st_size, "request_id": request.state.request_id,
+            }
+        existing_total = sum(path.stat().st_size for path in source_dir.glob("*.upload"))
+        received = 0
+        try:
+            with target.open("xb") as destination:
+                while chunk := await file.read(1024 * 1024):
+                    received += len(chunk)
+                    if received > settings_config.max_photo_bytes:
+                        raise HTTPException(413, "This photo is larger than 20 MB")
+                    if existing_total + received > settings_config.max_total_bytes:
+                        raise HTTPException(413, "The selected photos are larger than 500 MB in total")
+                    destination.write(chunk)
+            decoded_format(target)
+        except HTTPException:
+            target.unlink(missing_ok=True)
+            raise
+        except ValueError as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(415, str(exc)) from exc
+        finally:
+            await file.close()
+        repository.set_progress(job_id, min(4, round((index + 1) / job.photo_count * 4)))
+        logger.info(
+            "upload_file_received job_id=%s request_id=%s photo=%s/%s bytes=%s elapsed_ms=%s",
+            job_id, request.state.request_id, index + 1, job.photo_count, received,
+            round((time.monotonic() - started) * 1000),
+        )
+        return {
+            "status": "received", "index": index, "bytes": received,
+            "request_id": request.state.request_id,
+        }
+
+    @application.post("/api/uploads/{job_id}/complete")
+    async def complete_upload(
+        job_id: str, request: Request,
+        x_job_token: Annotated[str | None, Header()] = None,
+    ) -> JSONResponse:
+        job = authorised_job(job_id, x_job_token, None)
+        if job.state != JobState.UPLOADING:
+            raise HTTPException(409, "This upload has already been completed")
+        source_dir = safe_job_path(settings_config.jobs_dir, job_id) / "source"
+        missing = [index for index in range(job.photo_count) if not (source_dir / f"{index:03d}.upload").is_file()]
+        if missing:
+            raise HTTPException(409, f"Upload is incomplete; {len(missing)} photos are missing")
+        repository.transition(job_id, JobState.QUEUED, 5)
+        if start_services:
+            worker.submit(job_id)
+        logger.info(
+            "upload_completed job_id=%s request_id=%s photos=%s",
+            job_id, request.state.request_id, job.photo_count,
+        )
+        response = JSONResponse(
+            status_code=202,
+            content={"job_id": job_id, "access_token": x_job_token, "state": JobState.QUEUED},
+        )
+        response.set_cookie(
+            key=f"slideshow_{job_id}", value=x_job_token or "", httponly=True,
+            samesite="strict", secure=False, max_age=24 * 60 * 60,
+            path=f"/api/jobs/{job_id}",
+        )
+        return response
 
     @application.post("/api/jobs", status_code=202)
     async def create_job(

@@ -24,7 +24,7 @@ def cleanup_decision(job: JobRecord) -> tuple[bool, bool]:
     now = now_utc()
     if now - job.created_at >= timedelta(hours=24):
         return True, True
-    if job.state == JobState.QUEUED and now - job.updated_at >= timedelta(minutes=15):
+    if job.state in {JobState.UPLOADING, JobState.QUEUED} and now - job.updated_at >= timedelta(minutes=15):
         return True, False
     if job.state in {JobState.PREPARING, JobState.RENDERING} and now - job.updated_at >= timedelta(minutes=30):
         return True, False

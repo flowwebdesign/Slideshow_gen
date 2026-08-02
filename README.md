@@ -37,6 +37,13 @@ Each submitted slideshow displays a random job reference. Safe lifecycle events 
 logs. Access tokens and user filenames are deliberately excluded. A lightweight health check is
 available at `GET /health`.
 
+Large selections are uploaded one photo at a time instead of as one very large request. Each photo
+is retried up to three times after a connection interruption. Open **Upload help & diagnostics** in
+the photo section to run a 512 KB connection check and copy a privacy-safe report containing total
+size, HTTP status, failed photo number, and server request IDs. Match those IDs against recent server
+events with `docker logs --tail 120 <slideshow-container>`; photo names, contents, and access tokens
+are not logged.
+
 An easy non-Docker option is Python 3.12 plus system FFmpeg:
 
 ```bash

@@ -25,7 +25,16 @@ def create_three(client: TestClient):
         ("files", ("portrait.jpg", image_bytes((120, 240), (50, 150, 90)), "image/jpeg")),
         ("files", ("square.png", image_bytes((180, 180), (60, 85, 190), "PNG"), "image/png")),
     ]
-    return client.post("/api/jobs", files=files, data={"settings": valid_settings(3, title="Integration test")})
+    return client.post(
+        "/api/jobs", files=files,
+        data={"settings": valid_settings(
+            3, title="Integration test", subtitle="Timed overlay", style="custom",
+            title_mode="overlay", title_photo_index=1, title_start=0.25,
+            title_duration=0.5, text_x=0.25, text_y=0.2, text_color="#ffd166",
+            title_size=1.6, subtitle_size=0.8, text_panel_opacity=120,
+            text_align="left", text_animation="fade",
+        )},
+    )
 
 
 def probe(path) -> dict[str, object]:
@@ -65,7 +74,7 @@ def test_real_render_http_download_and_expiry(client: TestClient, application) -
     assert video["color_space"] == "bt709"
     assert video["color_primaries"] == "bt709"
     assert video["color_transfer"] == "bt709"
-    assert 3.0 <= float(metadata["format"]["duration"]) <= 5.0
+    assert 1.8 <= float(metadata["format"]["duration"]) <= 2.2
 
     preview = client.get(f"/api/jobs/{job_id}/preview", headers={"X-Job-Token": token})
     assert preview.status_code == 200

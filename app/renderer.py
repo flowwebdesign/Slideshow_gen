@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Sequence
 
-from app.models import Movement, SlideshowSettings, Transition
+from app.models import Movement, SlideshowSettings, TextAnimation, Transition
 
 
 XFADE_MAP = {
@@ -44,11 +44,15 @@ def _transition_for(settings: SlideshowSettings, index: int) -> Transition:
 def build_ffmpeg_args(
     ffmpeg_binary: str, image_paths: Sequence[Path], output_path: Path,
     settings: SlideshowSettings, frame_size: tuple[int, int], *, title_card: bool = False,
+    title_overlay_path: Path | None = None,
 ) -> list[str]:
     if not image_paths:
         raise ValueError("at least one prepared image is required")
     width, height = frame_size
-    durations = [3.0 if title_card and index == 0 else settings.duration for index in range(len(image_paths))]
+    durations = [
+        settings.title_duration if title_card and index == 0 else settings.duration
+        for index in range(len(image_paths))
+    ]
     args = [
         ffmpeg_binary, "-hide_banner", "-loglevel", "error", "-y",
         "-filter_threads", "2", "-filter_complex_threads", "2",
@@ -56,6 +60,13 @@ def build_ffmpeg_args(
     for image_path, duration in zip(image_paths, durations, strict=True):
         args.extend([
             "-framerate", "30", "-loop", "1", "-t", f"{duration:.3f}", "-i", str(image_path)
+        ])
+    overlay_input_index: int | None = None
+    if title_overlay_path is not None:
+        overlay_input_index = len(image_paths)
+        args.extend([
+            "-framerate", "30", "-loop", "1", "-t", f"{settings.duration:.3f}",
+            "-i", str(title_overlay_path),
         ])
 
     filters: list[str] = []
@@ -73,10 +84,30 @@ def build_ffmpeg_args(
             )
         else:
             visual = f"scale={width}:{height},fps=30"
+        target_photo_index = settings.title_photo_index + (1 if title_card else 0)
+        base_label = f"base{index}" if overlay_input_index is not None and index == target_photo_index else f"v{index}"
         filters.append(
             f"[{index}:v]{visual},fps=30,trim=duration={duration:.3f},setpts=PTS-STARTPTS,"
-            f"setsar=1,format=yuv420p,fps=30[v{index}]"
+            f"setsar=1,format=yuv420p,fps=30[{base_label}]"
         )
+        if overlay_input_index is not None and index == target_photo_index:
+            start = settings.title_start
+            end = settings.title_start + settings.title_duration
+            overlay_filter = (
+                f"[{overlay_input_index}:v]scale={width}:{height},fps=30,format=rgba,"
+                "setpts=PTS-STARTPTS"
+            )
+            if settings.text_animation == TextAnimation.FADE:
+                fade_duration = min(0.4, settings.title_duration / 3)
+                overlay_filter += (
+                    f",fade=t=in:st={start:.3f}:d={fade_duration:.3f}:alpha=1"
+                    f",fade=t=out:st={end - fade_duration:.3f}:d={fade_duration:.3f}:alpha=1"
+                )
+            filters.append(f"{overlay_filter}[titleoverlay]")
+            filters.append(
+                f"[{base_label}][titleoverlay]overlay=0:0:"
+                f"enable='between(t\\,{start:.3f}\\,{end:.3f})':shortest=1[v{index}]"
+            )
 
     final_label = "v0"
     if len(image_paths) > 1:

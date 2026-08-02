@@ -7,7 +7,20 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body id="top">
+  <nav class="site-nav" aria-label="Main navigation">
+    <div class="shell nav-inner">
+      <a class="nav-brand" href="#top" aria-label="ROB's Slideshow home">ROB's <span>Slideshow</span></a>
+      <button id="menu-toggle" class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-menu">
+        <span aria-hidden="true">☰</span> Menu
+      </button>
+      <div id="site-menu" class="site-menu">
+        <a href="#top">Home</a>
+        <a href="#photos-heading">Create</a>
+        <a id="settings-link" href="#settings-heading">Settings</a>
+      </div>
+    </div>
+  </nav>
   <header class="hero">
     <img class="hero-art" src="/static/rob-reader.png" alt="" aria-hidden="true">
     <div class="shell">
@@ -32,15 +45,42 @@
         </div>
         <input id="photo-input" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple>
         <p class="privacy">Your photos are used only to create this slideshow. Original photos are deleted after processing. The completed video is automatically deleted within one hour.</p>
+        <details id="upload-diagnostics" class="upload-diagnostics">
+          <summary>Upload help &amp; diagnostics</summary>
+          <p class="hint">If an upload stops, run the connection check and copy this report. It contains sizes and error codes, never photo names or contents.</p>
+          <div class="diagnostic-actions">
+            <button id="run-upload-check" class="small-button" type="button">Run connection check</button>
+            <button id="copy-diagnostics" class="small-button" type="button">Copy diagnostics</button>
+          </div>
+          <pre id="diagnostic-output">No upload test has been run yet.</pre>
+        </details>
         <div id="photo-summary" class="photo-summary" hidden><strong id="photo-count"></strong><span>Drag photos, or use the arrow buttons, to change their order.</span></div>
         <div id="photo-list" class="photo-grid" aria-live="polite"></div>
       </section>
 
       <section class="panel" aria-labelledby="words-heading">
-        <div class="step-heading"><span>2</span><div><h2 id="words-heading">Add a title <small>(optional)</small></h2><p>This appears as an opening card.</p></div></div>
+        <div class="step-heading"><span>2</span><div><h2 id="words-heading">Add a title <small>(optional)</small></h2><p>Use an opening card, place it over a photo, or hide it.</p></div></div>
         <div class="field-grid two">
           <label>Slideshow title <input id="title" type="text" maxlength="120" placeholder="Our family memories"></label>
           <label>Subtitle <input id="subtitle" type="text" maxlength="200" placeholder="Summer 2026"></label>
+          <label>Show title as
+            <select id="title-mode">
+              <option value="overlay" selected>Text over a photo</option>
+              <option value="card">Separate opening card</option>
+              <option value="hidden">Do not show title</option>
+            </select>
+          </label>
+          <label id="title-photo-label">Place title over
+            <select id="title-photo" disabled><option value="0">Choose photos first</option></select>
+          </label>
+          <label id="title-start-label">Title starts after
+            <input id="title-start" type="number" min="0" max="19.5" step="0.5" value="0" inputmode="decimal">
+            <small>seconds into the selected photo</small>
+          </label>
+          <label id="title-duration-label">Show title for
+            <input id="title-duration" type="number" min="0.5" max="20" step="0.5" value="3" inputmode="decimal">
+            <small>seconds</small>
+          </label>
         </div>
       </section>
 
@@ -89,7 +129,87 @@
 
         <details id="custom-settings" hidden>
           <summary>Custom settings</summary>
-          <p class="hint">These transition and movement choices apply when the Custom style is selected.</p>
+          <p class="hint">Adjust the design while watching the preview. Drag the title directly into position.</p>
+          <div class="advanced-studio">
+            <div class="preview-column">
+              <div id="design-preview" class="design-preview" aria-label="Slideshow design preview">
+                <div id="preview-backdrop" class="preview-backdrop"></div>
+                <img id="preview-photo" alt="Selected slideshow preview">
+                <div id="preview-title-layer" class="preview-title-layer" tabindex="0" aria-label="Drag to position title">
+                  <strong id="preview-title">Our family memories</strong>
+                  <span id="preview-subtitle">Summer 2026</span>
+                </div>
+                <div id="preview-caption" class="preview-caption">Caption preview</div>
+                <div class="safe-area" aria-hidden="true"></div>
+              </div>
+              <p class="preview-help">Drag the title or use the position grid. The dashed line marks the television-safe area.</p>
+            </div>
+            <div class="design-controls">
+              <label>Font style
+                <select id="font">
+                  <option value="modern" selected>Modern · DejaVu Sans</option>
+                  <option value="friendly">Friendly · Lato</option>
+                  <option value="elegant">Elegant · Noto Serif</option>
+                  <option value="cinematic">Cinematic · Lato Heavy</option>
+                  <option value="classic">Classic · DejaVu Serif</option>
+                  <option value="typewriter">Typewriter · Liberation Mono</option>
+                  <option value="large-tv">Extra bold · Large TV</option>
+                </select>
+              </label>
+              <label>Title size <output id="title-size-output">145%</output>
+                <input id="title-size" type="range" min="60" max="250" value="145">
+              </label>
+              <label>Subtitle size <output id="subtitle-size-output">85%</output>
+                <input id="subtitle-size" type="range" min="50" max="180" value="85">
+              </label>
+              <label>Caption size <output id="caption-size-output">100%</output>
+                <input id="caption-size" type="range" min="50" max="200" value="100">
+              </label>
+              <div class="field-grid two compact-fields">
+                <label>Text colour
+                  <input id="text-color" type="color" value="#ffffff">
+                </label>
+                <label>Text alignment
+                  <select id="text-align">
+                    <option value="left">Left</option>
+                    <option value="centre" selected>Centre</option>
+                    <option value="right">Right</option>
+                  </select>
+                </label>
+              </div>
+              <label>Dark panel <output id="panel-opacity-output">61%</output>
+                <input id="panel-opacity" type="range" min="0" max="90" value="61">
+              </label>
+              <label>Title animation
+                <select id="text-animation">
+                  <option value="fade" selected>Gentle fade</option>
+                  <option value="none">No animation</option>
+                </select>
+              </label>
+              <fieldset class="position-control">
+                <legend>Quick title position</legend>
+                <div id="position-grid" class="position-grid">
+                  <button type="button" data-x="15" data-y="15" aria-label="Top left"></button>
+                  <button type="button" data-x="50" data-y="15" aria-label="Top centre"></button>
+                  <button type="button" data-x="85" data-y="15" aria-label="Top right"></button>
+                  <button type="button" data-x="15" data-y="50" aria-label="Centre left"></button>
+                  <button type="button" data-x="50" data-y="50" aria-label="Centre"></button>
+                  <button type="button" data-x="85" data-y="50" aria-label="Centre right"></button>
+                  <button type="button" data-x="15" data-y="85" aria-label="Bottom left"></button>
+                  <button type="button" data-x="50" data-y="85" aria-label="Bottom centre"></button>
+                  <button type="button" data-x="85" data-y="85" aria-label="Bottom right"></button>
+                </div>
+              </fieldset>
+              <div class="field-grid two compact-fields">
+                <label>Horizontal <output id="title-x-output">50%</output>
+                  <input id="title-x" type="range" min="5" max="95" value="50">
+                </label>
+                <label>Vertical <output id="title-y-output">50%</output>
+                  <input id="title-y" type="range" min="5" max="95" value="50">
+                </label>
+              </div>
+            </div>
+          </div>
           <div class="field-grid two">
             <label>Transition
               <select id="transition">
@@ -102,12 +222,6 @@
               <select id="movement">
                 <option value="static" selected>Static</option><option value="zoom-in">Gentle zoom in</option>
                 <option value="zoom-out">Gentle zoom out</option><option value="auto">Automatic mix</option>
-              </select>
-            </label>
-            <label>Font style
-              <select id="font">
-                <option value="modern" selected>Modern</option><option value="classic">Classic</option>
-                <option value="friendly">Friendly</option><option value="large-tv">Large TV</option>
               </select>
             </label>
             <label>Caption position

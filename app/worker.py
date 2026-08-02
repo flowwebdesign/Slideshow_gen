@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.config import AppConfig
-from app.image_processing import create_title_card, prepare_photo
+from app.image_processing import create_title_card, create_title_overlay, prepare_photo
 from app.jobs import JobRepository
-from app.models import JobState, RESOLUTIONS
+from app.models import JobState, RESOLUTIONS, TitleMode
 from app.renderer import build_ffmpeg_args, run_ffmpeg
 from app.security import safe_job_path
 
@@ -66,17 +66,25 @@ class RenderWorker:
             frame_size = RESOLUTIONS[job.settings.aspect_ratio]
             prepared_paths: list[Path] = []
             has_title = bool(job.settings.title or job.settings.subtitle)
-            if has_title:
+            title_card = has_title and job.settings.title_mode == TitleMode.CARD
+            title_overlay_path: Path | None = None
+            if title_card:
                 title_path = prepared_dir / "title.png"
                 create_title_card(title_path, frame_size, job.settings)
                 prepared_paths.append(title_path)
+            elif has_title and job.settings.title_mode == TitleMode.OVERLAY:
+                title_overlay_path = prepared_dir / "title-overlay.png"
+                create_title_overlay(title_overlay_path, frame_size, job.settings)
             for index in range(job.photo_count):
                 source_path = source_dir / f"{index:03d}.upload"
                 output_path = prepared_dir / f"{index:03d}.png"
                 prepare_photo(
                     source_path, output_path, frame_size, job.settings.rotations[index],
                     job.settings.background, job.settings.captions[index], job.settings.font,
-                    job.settings.text_position,
+                    job.settings.text_position, caption_size=job.settings.caption_size,
+                    text_colour=job.settings.text_color,
+                    panel_opacity=job.settings.text_panel_opacity,
+                    text_align=job.settings.text_align,
                 )
                 prepared_paths.append(output_path)
                 self.repository.set_progress(job_id, 15 + round(30 * (index + 1) / job.photo_count))
@@ -86,7 +94,7 @@ class RenderWorker:
             output_path = job_dir / "output.mp4"
             args = build_ffmpeg_args(
                 self.config.ffmpeg_binary, prepared_paths, output_path, job.settings,
-                frame_size, title_card=has_title,
+                frame_size, title_card=title_card, title_overlay_path=title_overlay_path,
             )
             progress_stop = threading.Event()
             progress_thread = threading.Thread(

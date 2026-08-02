@@ -11,11 +11,13 @@ from pydantic import ValidationError
 from app.cleanup import cleanup_decision
 from app.config import AppConfig
 from app.image_processing import (
-    aspect_fill, aspect_fit, decoded_format, has_allowed_extension, orient_and_rotate,
-    prepare_photo,
+    aspect_fill, aspect_fit, create_title_overlay, decoded_format, has_allowed_extension,
+    orient_and_rotate, prepare_photo,
 )
 from app.jobs import JobRepository
-from app.models import Background, FontPreset, JobState, SlideshowSettings, TextPosition, now_utc
+from app.models import (
+    Background, FontPreset, JobState, SlideshowSettings, TextPosition, TitleMode, now_utc,
+)
 from app.renderer import build_ffmpeg_args, escape_drawtext, run_ffmpeg
 from app.security import (
     generate_access_token, generate_job_id, safe_job_path, token_digest, token_matches,
@@ -90,6 +92,8 @@ def test_expiry_decisions() -> None:
     }
     queued = __import__("app.models", fromlist=["JobRecord"]).JobRecord(**base, state=JobState.QUEUED)
     assert cleanup_decision(queued) == (False, False)
+    uploading = queued.model_copy(update={"state": JobState.UPLOADING})
+    assert cleanup_decision(uploading.model_copy(update={"updated_at": now - timedelta(minutes=16)})) == (True, False)
     assert cleanup_decision(queued.model_copy(update={"updated_at": now - timedelta(minutes=16)})) == (True, False)
     rendering = queued.model_copy(update={"state": JobState.RENDERING, "updated_at": now - timedelta(minutes=31)})
     assert cleanup_decision(rendering) == (True, False)
@@ -133,6 +137,27 @@ def test_duration_and_count_maximum() -> None:
         value.validate_for_count(61, 1200)
 
 
+def test_title_overlay_must_target_an_existing_photo_and_fit_its_time() -> None:
+    missing = settings(
+        title="Overlay", duration=5, title_mode=TitleMode.OVERLAY,
+        title_photo_index=1, title_start=0, title_duration=2,
+    )
+    with pytest.raises(ValueError, match="photo must exist"):
+        missing.validate_for_count(1, 1200)
+    too_late = settings(
+        title="Overlay", duration=5, title_mode=TitleMode.OVERLAY,
+        title_photo_index=0, title_start=4, title_duration=2,
+    )
+    with pytest.raises(ValueError, match="timing must fit"):
+        too_late.validate_for_count(1, 1200)
+
+
+@pytest.mark.parametrize("colour", ["white", "#fffff", "#fffffg", "123456"])
+def test_text_colour_requires_hex(colour: str) -> None:
+    with pytest.raises(ValidationError):
+        settings(text_color=colour)
+
+
 @pytest.mark.parametrize("style", ["simple", "smooth", "classic", "celebration"])
 def test_presets_keep_photos_static(style: str) -> None:
     value = settings(style=style, movement="zoom-in")
@@ -170,6 +195,33 @@ def test_ffmpeg_argument_construction_has_safe_output(tmp_path: Path) -> None:
     assert str(tmp_path / "output.mp4") == args[-1]
 
 
+def test_ffmpeg_title_overlay_is_timed_on_selected_photo(tmp_path: Path) -> None:
+    overlay = tmp_path / "title-overlay.png"
+    args = build_ffmpeg_args(
+        "ffmpeg", [tmp_path / "one.png", tmp_path / "two.png"], tmp_path / "output.mp4",
+        settings(
+            style="custom", duration=2, title_mode="overlay", title_photo_index=1,
+            title_start=0.25, title_duration=0.5, text_animation="fade",
+        ),
+        (1920, 1080), title_overlay_path=overlay,
+    )
+    filters = args[args.index("-filter_complex") + 1]
+    assert str(overlay) in args
+    assert "[1:v]scale=1920:1080" in filters
+    assert "overlay=0:0" in filters
+    assert "between(t\\,0.250\\,0.750)" in filters
+    assert "fade=t=in" in filters and "alpha=1" in filters
+
+
+def test_opening_card_uses_configured_duration(tmp_path: Path) -> None:
+    args = build_ffmpeg_args(
+        "ffmpeg", [tmp_path / "title.png", tmp_path / "photo.png"], tmp_path / "output.mp4",
+        settings(title_duration=4), (1920, 1080), title_card=True,
+    )
+    first_duration = args[args.index("-t") + 1]
+    assert first_duration == "4.000"
+
+
 def test_prepared_image_uses_lossless_png(tmp_path: Path) -> None:
     source = tmp_path / "source.jpg"
     output = tmp_path / "prepared.png"
@@ -181,6 +233,23 @@ def test_prepared_image_uses_lossless_png(tmp_path: Path) -> None:
     with Image.open(output) as prepared:
         assert prepared.format == "PNG"
         assert prepared.size == (320, 180)
+
+
+def test_title_overlay_is_a_transparent_full_frame_png(tmp_path: Path) -> None:
+    output = tmp_path / "title-overlay.png"
+    create_title_overlay(
+        output, (640, 360), settings(
+            title="A title", subtitle="A subtitle", title_mode="overlay",
+            font="modern", text_color="#ffd166", text_x=0.2, text_y=0.75,
+        ),
+    )
+    with Image.open(output) as overlay:
+        assert overlay.format == "PNG"
+        assert overlay.mode == "RGBA"
+        assert overlay.size == (640, 360)
+        minimum, maximum = overlay.getchannel("A").getextrema()
+        assert minimum == 0
+        assert maximum > 0
 
 
 def test_zoom_movement_emits_one_frame_per_input_frame(tmp_path: Path) -> None:

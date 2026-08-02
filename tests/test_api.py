@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -26,6 +27,101 @@ def test_main_page_loads_and_is_responsive(client: TestClient) -> None:
     assert 'src="/static/app.js"' in response.text
     assert 'id="video-estimate"' in response.text
     assert "Create another slideshow" in response.text
+    assert 'id="menu-toggle"' in response.text
+    assert 'id="settings-link"' in response.text
+    assert 'id="design-preview"' in response.text
+    assert 'id="title-mode"' in response.text
+    assert 'id="font"' in response.text
+
+
+def test_font_assets_are_allow_listed(client: TestClient) -> None:
+    font = client.get("/assets/fonts/modern")
+    assert font.status_code == 200
+    assert font.headers["content-type"].startswith("font/ttf")
+    assert client.get("/assets/fonts/../../etc/passwd").status_code == 404
+    assert client.get("/assets/fonts/not-a-font").status_code == 404
+
+
+def test_upload_connection_check_returns_request_id(client: TestClient) -> None:
+    response = client.post(
+        "/api/upload-check", content=b"x" * (512 * 1024),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 200
+    assert response.json()["bytes_received"] == 512 * 1024
+    assert response.json()["request_id"] == response.headers["X-Request-ID"]
+
+
+def test_resilient_upload_session_accepts_files_separately(client: TestClient, application) -> None:
+    started = client.post(
+        "/api/uploads",
+        json={"photo_count": 2, "settings": json.loads(valid_settings(2, title_mode="hidden"))},
+    )
+    assert started.status_code == 201, started.text
+    upload = started.json()
+    token_header = {"X-Job-Token": upload["access_token"]}
+    for index in range(2):
+        received = client.post(
+            f"/api/uploads/{upload['job_id']}/files/{index}", headers=token_header,
+            files={"file": (f"photo-{index}.jpg", image_bytes(), "image/jpeg")},
+        )
+        assert received.status_code == 200, received.text
+        assert received.json()["status"] == "received"
+        assert received.json()["request_id"] == received.headers["X-Request-ID"]
+    retry = client.post(
+        f"/api/uploads/{upload['job_id']}/files/1", headers=token_header,
+        files={"file": ("photo-1.jpg", image_bytes(), "image/jpeg")},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "already_received"
+    completed = client.post(
+        f"/api/uploads/{upload['job_id']}/complete", headers=token_header,
+    )
+    assert completed.status_code == 202
+    assert application.state.repository.get(upload["job_id"]).state == JobState.QUEUED
+
+
+def test_resilient_upload_reports_missing_and_unauthorised_files(client: TestClient) -> None:
+    started = client.post(
+        "/api/uploads",
+        json={"photo_count": 1, "settings": json.loads(valid_settings(1, title_mode="hidden"))},
+    ).json()
+    url = f"/api/uploads/{started['job_id']}"
+    assert client.post(
+        f"{url}/files/0", headers={"X-Job-Token": "wrong"},
+        files={"file": ("photo.jpg", image_bytes(), "image/jpeg")},
+    ).status_code == 403
+    incomplete = client.post(
+        f"{url}/complete", headers={"X-Job-Token": started["access_token"]},
+    )
+    assert incomplete.status_code == 409
+    assert "1 photos are missing" in incomplete.json()["detail"]
+
+
+def test_resilient_upload_supports_100_photos_without_one_large_request(client: TestClient, application) -> None:
+    count = 100
+    started = client.post(
+        "/api/uploads",
+        json={
+            "photo_count": count,
+            "settings": json.loads(valid_settings(count, title_mode="hidden", duration=1)),
+        },
+    )
+    assert started.status_code == 201, started.text
+    upload = started.json()
+    headers = {"X-Job-Token": upload["access_token"]}
+    tiny_photo = image_bytes((2, 2))
+    for index in range(count):
+        response = client.post(
+            f"/api/uploads/{upload['job_id']}/files/{index}", headers=headers,
+            files={"file": (f"photo-{index}.jpg", tiny_photo, "image/jpeg")},
+        )
+        assert response.status_code == 200, f"photo {index + 1}: {response.text}"
+    completed = client.post(
+        f"/api/uploads/{upload['job_id']}/complete", headers=headers,
+    )
+    assert completed.status_code == 202
+    assert application.state.repository.get(upload["job_id"]).state == JobState.QUEUED
 
 
 def test_health_endpoint(client: TestClient, monkeypatch) -> None:

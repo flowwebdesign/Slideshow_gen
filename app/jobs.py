@@ -9,6 +9,7 @@ from app.models import JobRecord, JobState, SlideshowSettings, now_utc
 
 
 ALLOWED_TRANSITIONS: dict[JobState, set[JobState]] = {
+    JobState.UPLOADING: {JobState.QUEUED, JobState.FAILED, JobState.EXPIRED},
     JobState.QUEUED: {JobState.PREPARING, JobState.FAILED, JobState.EXPIRED},
     JobState.PREPARING: {JobState.RENDERING, JobState.FAILED, JobState.EXPIRED},
     JobState.RENDERING: {JobState.READY, JobState.FAILED, JobState.EXPIRED},
@@ -41,12 +42,19 @@ class JobRepository:
                 )"""
             )
 
-    def create(self, job_id: str, token_hash: str, settings: SlideshowSettings, photo_count: int) -> JobRecord:
+    def create(
+        self, job_id: str, token_hash: str, settings: SlideshowSettings, photo_count: int,
+        *, initial_state: JobState = JobState.QUEUED,
+    ) -> JobRecord:
         now = now_utc().isoformat()
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL)",
-                (job_id, token_hash, JobState.QUEUED, 5, settings.model_dump_json(), photo_count, now, now),
+                (
+                    job_id, token_hash, initial_state,
+                    0 if initial_state == JobState.UPLOADING else 5,
+                    settings.model_dump_json(), photo_count, now, now,
+                ),
             )
         record = self.get(job_id)
         assert record is not None
