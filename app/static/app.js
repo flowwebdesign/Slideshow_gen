@@ -7,6 +7,7 @@
   const form = document.querySelector("#slideshow-form");
   const input = document.querySelector("#photo-input");
   const dropZone = document.querySelector("#upload-zone");
+  const choosePhotos = document.querySelector("#choose-photos");
   const list = document.querySelector("#photo-list");
   const count = document.querySelector("#photo-count");
   const summary = document.querySelector("#photo-summary");
@@ -23,6 +24,9 @@
   const customDuration = document.querySelector("#custom-duration");
   const style = document.querySelector("#style");
   const customSettings = document.querySelector("#custom-settings");
+  const simpleView = document.querySelector("#simple-view");
+  const advancedView = document.querySelector("#advanced-view");
+  const viewDescription = document.querySelector("#view-description");
   let photos = [];
   let draggedIndex = null;
 
@@ -121,11 +125,23 @@
   }
 
   input.addEventListener("change", () => addFiles(input.files));
+  choosePhotos.addEventListener("click", () => input.click());
   ["dragenter", "dragover"].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.add("dragging"); }));
   ["dragleave", "drop"].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.remove("dragging"); }));
   dropZone.addEventListener("drop", event => addFiles(event.dataTransfer.files));
   durationChoice.addEventListener("change", () => { customDurationLabel.hidden = durationChoice.value !== "custom"; });
-  style.addEventListener("change", () => { if (style.value === "custom") customSettings.open = true; });
+  function setAdvancedView(enabled) {
+    simpleView.setAttribute("aria-pressed", String(!enabled));
+    advancedView.setAttribute("aria-pressed", String(enabled));
+    customSettings.hidden = !enabled;
+    customSettings.open = enabled;
+    viewDescription.textContent = enabled
+      ? "Advanced view adds transition, movement, font, and caption-position controls."
+      : "Simple view keeps the recommended settings and the essential choices.";
+  }
+  simpleView.addEventListener("click", () => setAdvancedView(false));
+  advancedView.addEventListener("click", () => setAdvancedView(true));
+  style.addEventListener("change", () => { if (style.value === "custom") setAdvancedView(true); });
 
   function setProgress(value, message) {
     const rounded = Math.max(0, Math.min(100, Math.round(value)));
@@ -154,11 +170,13 @@
   }
 
   function pollJob(jobId, token) {
+    let networkFailures = 0;
     const poll = async () => {
       try {
         const response = await fetch(`/api/jobs/${jobId}/status`, { headers: { "X-Job-Token": token }, cache: "no-store" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || data.error || "Could not check the slideshow");
+        networkFailures = 0;
         const messages = { queued: "Waiting for the video maker", preparing: "Preparing your photos", rendering: "Creating the video", ready: "Finished", downloaded: "Finished" };
         setProgress(data.progress, messages[data.state] || "Working");
         if (data.state === "ready" || data.state === "downloaded") {
@@ -166,6 +184,11 @@
           resultPanel.hidden = false;
           const preview = document.querySelector("#video-preview");
           preview.src = `/api/jobs/${jobId}/preview`;
+          preview.addEventListener("error", () => {
+            const previewError = document.querySelector("#preview-error");
+            previewError.textContent = "The preview could not be loaded. Your video may have expired; try downloading it or create it again.";
+            previewError.hidden = false;
+          }, { once: true });
           const download = document.querySelector("#download-button");
           download.href = `/api/jobs/${jobId}/download`;
           download.addEventListener("click", () => { document.querySelector("#youtube-help").hidden = false; }, { once: true });
@@ -175,10 +198,19 @@
         if (data.state === "failed" || data.state === "expired") throw new Error(data.error || "The slideshow could not be created. Please try again.");
         window.setTimeout(poll, 1000);
       } catch (problem) {
+        networkFailures += 1;
+        if (problem instanceof TypeError && networkFailures <= 6) {
+          const waitSeconds = Math.min(10, networkFailures * 2);
+          setProgress(Number(progressTrack.getAttribute("aria-valuenow")), `Connection interrupted. Retrying in ${waitSeconds} seconds…`);
+          window.setTimeout(poll, waitSeconds * 1000);
+          return;
+        }
         progressPanel.hidden = true;
         form.hidden = false;
         submit.disabled = false;
-        showError(problem.message);
+        showError(problem instanceof TypeError
+          ? "The server could not be reached after several attempts. Check that it is running, then try again."
+          : problem.message);
       }
     };
     poll();
@@ -198,6 +230,7 @@
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/jobs");
     xhr.responseType = "json";
+    xhr.timeout = 10 * 60 * 1000;
     xhr.upload.addEventListener("progress", progress => {
       if (progress.lengthComputable) setProgress((progress.loaded / progress.total) * 10, "Uploading your photos");
     });
@@ -207,9 +240,13 @@
         return showError(xhr.response?.detail || xhr.response?.error || "The upload could not be started.");
       }
       setProgress(10, "Upload complete. Preparing your photos");
+      const reference = document.querySelector("#job-reference");
+      reference.textContent = `Job reference: ${xhr.response.job_id}`;
+      reference.hidden = false;
       pollJob(xhr.response.job_id, xhr.response.access_token);
     });
     xhr.addEventListener("error", () => { progressPanel.hidden = true; form.hidden = false; submit.disabled = false; showError("The upload was interrupted. Please try again."); });
+    xhr.addEventListener("timeout", () => { progressPanel.hidden = true; form.hidden = false; submit.disabled = false; showError("The upload took too long. Check your connection and try fewer or smaller photos."); });
     submit.disabled = true;
     form.hidden = true;
     progressPanel.hidden = false;
@@ -218,4 +255,16 @@
   });
 
   window.addEventListener("beforeunload", () => photos.forEach(photo => URL.revokeObjectURL(photo.url)));
+  document.querySelector("#fullscreen-button").addEventListener("click", async () => {
+    const preview = document.querySelector("#video-preview");
+    const previewError = document.querySelector("#preview-error");
+    try {
+      if (preview.requestFullscreen) await preview.requestFullscreen();
+      else if (preview.webkitEnterFullscreen) preview.webkitEnterFullscreen();
+      await preview.play();
+    } catch (_problem) {
+      previewError.textContent = "Full-screen playback could not start automatically. Press play, then use the full-screen icon in the video controls.";
+      previewError.hidden = false;
+    }
+  });
 })();

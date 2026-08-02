@@ -12,9 +12,10 @@ from app.cleanup import cleanup_decision
 from app.config import AppConfig
 from app.image_processing import (
     aspect_fill, aspect_fit, decoded_format, has_allowed_extension, orient_and_rotate,
+    prepare_photo,
 )
 from app.jobs import JobRepository
-from app.models import JobState, SlideshowSettings, now_utc
+from app.models import Background, FontPreset, JobState, SlideshowSettings, TextPosition, now_utc
 from app.renderer import build_ffmpeg_args, escape_drawtext, run_ffmpeg
 from app.security import (
     generate_access_token, generate_job_id, safe_job_path, token_digest, token_matches,
@@ -132,6 +133,12 @@ def test_duration_and_count_maximum() -> None:
         value.validate_for_count(61, 1200)
 
 
+@pytest.mark.parametrize("style", ["simple", "smooth", "classic", "celebration"])
+def test_presets_keep_photos_static(style: str) -> None:
+    value = settings(style=style, movement="zoom-in")
+    assert value.movement.value == "static"
+
+
 @pytest.mark.parametrize("field,value", [("transition", "shell"), ("font", "uploaded.ttf")])
 def test_transition_and_font_allow_lists(field: str, value: str) -> None:
     with pytest.raises(ValidationError):
@@ -152,8 +159,38 @@ def test_ffmpeg_argument_construction_has_safe_output(tmp_path: Path) -> None:
     joined = " ".join(args)
     assert args[0] == "ffmpeg"
     assert "libx264" in args and "yuv420p" in args and "+faststart" in args
+    assert args[args.index("-crf") + 1] == "18"
+    assert args[args.index("-filter_complex_threads") + 1] == "2"
+    assert args[args.index("-threads") + 1] == "2"
+    assert args[args.index("-profile:v") + 1] == "high"
+    assert args[args.index("-colorspace") + 1] == "bt709"
+    assert args[args.index("-color_primaries") + 1] == "bt709"
+    assert args[args.index("-color_trc") + 1] == "bt709"
     assert "wipeleft" in joined and "1920:1080" in joined
     assert str(tmp_path / "output.mp4") == args[-1]
+
+
+def test_prepared_image_uses_lossless_png(tmp_path: Path) -> None:
+    source = tmp_path / "source.jpg"
+    output = tmp_path / "prepared.png"
+    Image.new("RGB", (80, 120), "purple").save(source, "JPEG")
+    prepare_photo(
+        source, output, (320, 180), 0, Background.BLURRED, "",
+        FontPreset.MODERN, TextPosition.BOTTOM,
+    )
+    with Image.open(output) as prepared:
+        assert prepared.format == "PNG"
+        assert prepared.size == (320, 180)
+
+
+def test_zoom_movement_emits_one_frame_per_input_frame(tmp_path: Path) -> None:
+    args = build_ffmpeg_args(
+        "ffmpeg", [tmp_path / "one.jpg"], tmp_path / "output.mp4",
+        settings(style="custom", movement="zoom-in"), (1920, 1080),
+    )
+    filters = args[args.index("-filter_complex") + 1]
+    assert ":d=1:" in filters
+    assert ":d=150:" not in filters
 
 
 def test_ffmpeg_invocation_uses_shell_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,4 +204,3 @@ def test_ffmpeg_invocation_uses_shell_false(monkeypatch: pytest.MonkeyPatch) -> 
     run_ffmpeg(["ffmpeg", "-version"], 5)
     assert captured["shell"] is False
     assert captured["timeout"] == 5
-

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 import subprocess
 from pathlib import Path
 from typing import Sequence
@@ -50,7 +49,10 @@ def build_ffmpeg_args(
         raise ValueError("at least one prepared image is required")
     width, height = frame_size
     durations = [3.0 if title_card and index == 0 else settings.duration for index in range(len(image_paths))]
-    args = [ffmpeg_binary, "-hide_banner", "-loglevel", "error", "-y"]
+    args = [
+        ffmpeg_binary, "-hide_banner", "-loglevel", "error", "-y",
+        "-filter_threads", "2", "-filter_complex_threads", "2",
+    ]
     for image_path, duration in zip(image_paths, durations, strict=True):
         args.extend([
             "-framerate", "30", "-loop", "1", "-t", f"{duration:.3f}", "-i", str(image_path)
@@ -58,17 +60,16 @@ def build_ffmpeg_args(
 
     filters: list[str] = []
     for index, duration in enumerate(durations):
-        frames = max(1, round(duration * 30))
         movement = Movement.STATIC if title_card and index == 0 else _movement_for(settings, index)
         if movement == Movement.ZOOM_IN:
             visual = (
-                f"zoompan=z='min(zoom+0.0007,1.05)':"
-                f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={width}x{height}:fps=30"
+                f"zoompan=z='min(max(zoom,pzoom)+0.00035,1.05)':"
+                f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps=30"
             )
         elif movement == Movement.ZOOM_OUT:
             visual = (
-                f"zoompan=z='if(eq(on,1),1.05,max(1.0,zoom-0.0007))':"
-                f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={width}x{height}:fps=30"
+                f"zoompan=z='if(eq(on,0),1.05,max(1.0,pzoom-0.00035))':"
+                f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps=30"
             )
         else:
             visual = f"scale={width}:{height},fps=30"
@@ -105,7 +106,10 @@ def build_ffmpeg_args(
 
     args.extend([
         "-filter_complex", ";".join(filters), "-map", f"[{final_label}]", "-an",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-threads", "2",
+        "-profile:v", "high", "-level:v", "4.1", "-pix_fmt", "yuv420p",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+        "-color_range", "tv",
         "-r", "30", "-movflags", "+faststart", str(output_path),
     ])
     return args

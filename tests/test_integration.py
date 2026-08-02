@@ -32,7 +32,7 @@ def probe(path) -> dict[str, object]:
     result = subprocess.run(
         [
             "ffprobe", "-v", "error", "-show_entries",
-            "stream=codec_name,width,height,pix_fmt:format=duration", "-of", "json", str(path),
+            "stream=codec_name,width,height,pix_fmt,profile,color_space,color_primaries,color_transfer,color_range:format=duration", "-of", "json", str(path),
         ],
         check=True, shell=False, capture_output=True, text=True,
     )
@@ -61,6 +61,10 @@ def test_real_render_http_download_and_expiry(client: TestClient, application) -
     assert video["codec_name"] == "h264"
     assert (video["width"], video["height"]) == (1920, 1080)
     assert video["pix_fmt"] == "yuv420p"
+    assert video["profile"] == "High"
+    assert video["color_space"] == "bt709"
+    assert video["color_primaries"] == "bt709"
+    assert video["color_transfer"] == "bt709"
     assert 3.0 <= float(metadata["format"]["duration"]) <= 5.0
 
     preview = client.get(f"/api/jobs/{job_id}/preview", headers={"X-Job-Token": token})

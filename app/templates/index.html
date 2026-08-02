@@ -3,15 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Create a photo slideshow</title>
+  <title>ROB's Slideshow Generator</title>
+  <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
 </head>
 <body>
   <header class="hero">
+    <img class="hero-art" src="{{ url_for('static', path='/rob-reader.png') }}" alt="" aria-hidden="true">
     <div class="shell">
-      <p class="eyebrow">Photo Slideshow</p>
-      <h1>Turn your photos into a video</h1>
-      <p class="intro">Choose your photos, put them in order, and we’ll make a video ready for your television or YouTube.</p>
+      <div class="hero-copy">
+        <p class="eyebrow">Simple · Private · Made for TV</p>
+        <h1><span>ROB's</span> Slideshow Generator</h1>
+        <p class="intro">Turn your favourite photos into a beautiful, full-screen video—ready for your television or YouTube.</p>
+      </div>
     </div>
   </header>
 
@@ -19,12 +23,14 @@
     <form id="slideshow-form" novalidate>
       <section class="panel" aria-labelledby="photos-heading">
         <div class="step-heading"><span>1</span><div><h2 id="photos-heading">Choose your photos</h2><p>Up to 100 photos. JPEG, PNG, WebP, HEIC, or HEIF.</p></div></div>
-        <label class="upload-zone" id="upload-zone" for="photo-input">
-          <span class="upload-icon" aria-hidden="true">＋</span>
-          <strong>Tap here to choose photos</strong>
+        <div class="upload-zone" id="upload-zone">
+          <button id="choose-photos" class="upload-picker" type="button">
+            <span class="upload-icon" aria-hidden="true">＋</span>
+            <strong>Tap here to choose photos</strong>
+          </button>
           <span>or drop photos here from your computer</span>
-          <input id="photo-input" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple>
-        </label>
+        </div>
+        <input id="photo-input" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple>
         <p class="privacy">Your photos are used only to create this slideshow. Original photos are deleted after processing. The completed video is automatically deleted within one hour.</p>
         <div id="photo-summary" class="photo-summary" hidden><strong id="photo-count"></strong><span>Drag photos, or use the arrow buttons, to change their order.</span></div>
         <div id="photo-list" class="photo-grid" aria-live="polite"></div>
@@ -40,6 +46,11 @@
 
       <section class="panel" aria-labelledby="settings-heading">
         <div class="step-heading"><span>3</span><div><h2 id="settings-heading">Choose the look</h2><p>The recommended choices are already selected.</p></div></div>
+        <div class="view-switch" role="group" aria-label="Settings view">
+          <button id="simple-view" type="button" aria-pressed="true">Simple</button>
+          <button id="advanced-view" type="button" aria-pressed="false">Advanced</button>
+        </div>
+        <p id="view-description" class="hint">Simple view keeps the recommended settings and the essential choices.</p>
         <div class="field-grid two">
           <label>Time for each photo
             <select id="duration-choice">
@@ -68,7 +79,7 @@
           <label>Style
             <select id="style">
               <option value="simple">Simple</option>
-              <option value="smooth" selected>Smooth — recommended</option>
+              <option value="smooth" selected>Smooth fades — recommended</option>
               <option value="classic">Classic</option>
               <option value="celebration">Celebration</option>
               <option value="custom">Custom</option>
@@ -76,7 +87,7 @@
           </label>
         </div>
 
-        <details id="custom-settings">
+        <details id="custom-settings" hidden>
           <summary>Custom settings</summary>
           <p class="hint">These transition and movement choices apply when the Custom style is selected.</p>
           <div class="field-grid two">
@@ -89,7 +100,7 @@
             </label>
             <label>Photo movement
               <select id="movement">
-                <option value="static">Static</option><option value="zoom-in" selected>Gentle zoom in</option>
+                <option value="static" selected>Static</option><option value="zoom-in">Gentle zoom in</option>
                 <option value="zoom-out">Gentle zoom out</option><option value="auto">Automatic mix</option>
               </select>
             </label>
@@ -115,6 +126,7 @@
     <section id="progress-panel" class="panel result-panel" hidden aria-live="polite">
       <h2 id="progress-title">Creating your slideshow…</h2>
       <p id="progress-message">Uploading your photos</p>
+      <p id="job-reference" class="job-reference" hidden></p>
       <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div></div>
       <strong id="progress-number">0%</strong>
     </section>
@@ -123,6 +135,8 @@
       <p class="success-mark" aria-hidden="true">✓</p>
       <h2>Your slideshow is ready</h2>
       <video id="video-preview" controls playsinline preload="metadata"></video>
+      <div id="preview-error" class="message error" role="alert" hidden></div>
+      <button id="fullscreen-button" class="secondary-button" type="button">View video full screen</button>
       <a id="download-button" class="create-button download-button" href="#">Download your video</a>
       <div id="youtube-help" class="youtube-help" hidden>
         <h3>Put your video on YouTube</h3>
@@ -135,7 +149,7 @@
       </div>
     </section>
   </main>
-  <footer><div class="shell">Local MVP · Your files are temporary and private to this job.</div></footer>
+  <footer><div class="shell">ROB's Slideshow Generator · Your files are temporary and private to this job.</div></footer>
   <script src="{{ url_for('static', path='/app.js') }}" defer></script>
 </body>
 </html>

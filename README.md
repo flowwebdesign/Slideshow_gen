@@ -2,6 +2,8 @@
 
 A local, mobile-friendly FastAPI application that turns ordered JPEG, PNG, WebP, HEIC, or HEIF photos into a television-compatible MP4. It uses Pillow for safe image decoding and normalization, FFmpeg for H.264 rendering, SQLite for job state, and a bounded in-process worker.
 
+The simple default preserves the complete still photograph without stretching or foreground cropping, uses lossless temporary PNG frames, and produces high-quality Full HD Rec.709 video. Photo movement is used only when explicitly chosen under Advanced custom settings.
+
 ## Run locally
 
 The primary command is:
@@ -29,6 +31,11 @@ docker compose logs --tail 120
 # One independent cleanup pass
 docker compose exec slideshow python -m app.cleanup --once
 ```
+
+Each submitted slideshow displays a random job reference. Safe lifecycle events using that reference
+(`job_queued`, `job_preparing`, `job_rendering`, `job_ready`, or `job_failed`) appear in the container
+logs. Access tokens and user filenames are deliberately excluded. A lightweight health check is
+available at `GET /health`.
 
 An easy non-Docker option is Python 3.12 plus system FFmpeg:
 
@@ -69,4 +76,3 @@ A Playwright dependency is intentionally not installed in this focused MVP becau
 The service consists of a FastAPI HTTP layer, SQLite repository, bounded `ThreadPoolExecutor`, Pillow image-preparation module, FFmpeg command builder, renderer, and cleanup service. FFmpeg currently emits video without an audio stream. Its renderer boundary accepts prepared visuals and can later gain an approved music input/mix without changing job creation or storage.
 
 Before any public launch, add reverse-proxy/request rate limiting, CAPTCHA or equivalent abuse protection, upload-body limits at the proxy, disk monitoring/alerts, production TLS, and a public security review. Those controls are deliberately not represented as already active.
-

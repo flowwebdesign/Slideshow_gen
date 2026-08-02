@@ -80,7 +80,7 @@ class SlideshowSettings(BaseModel):
     background: Background = Background.BLURRED
     style: StylePreset = StylePreset.SMOOTH
     transition: Transition = Transition.FADE
-    movement: Movement = Movement.ZOOM_IN
+    movement: Movement = Movement.STATIC
     font: FontPreset = FontPreset.MODERN
     text_position: TextPosition = TextPosition.BOTTOM
     rotations: list[int] = Field(default_factory=list)
@@ -111,7 +111,7 @@ class SlideshowSettings(BaseModel):
             self.movement = Movement.STATIC
             self.transition = Transition.FADE
         elif self.style == StylePreset.SMOOTH:
-            self.movement = Movement.ZOOM_IN
+            self.movement = Movement.STATIC
             self.transition = Transition.FADE
         elif self.style == StylePreset.CLASSIC:
             self.background = Background.BLACK
@@ -119,7 +119,7 @@ class SlideshowSettings(BaseModel):
             self.transition = Transition.FADE
             self.font = FontPreset.CLASSIC
         elif self.style == StylePreset.CELEBRATION:
-            self.movement = Movement.AUTO
+            self.movement = Movement.STATIC
             self.transition = Transition.AUTO
             self.font = FontPreset.LARGE_TV
         return self

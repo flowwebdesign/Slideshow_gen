@@ -20,6 +20,24 @@ def test_main_page_loads_and_is_responsive(client: TestClient) -> None:
     assert "Create slideshow" in response.text
     assert 'name="viewport"' in response.text
     assert "automatically deleted within one hour" in response.text
+    assert "ROB's Slideshow Generator" in response.text
+    assert "/static/rob-reader.png" in response.text
+
+
+def test_health_endpoint(client: TestClient) -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_stylesheet_contains_phone_layout(client: TestClient) -> None:
+    response = client.get("/static/styles.css")
+    assert response.status_code == 200
+    stylesheet = response.text
+    assert "@media (max-width: 640px)" in stylesheet
+    assert ".field-grid.two { grid-template-columns: 1fr; }" in stylesheet
+    assert ".hero-art" in stylesheet
+    assert "max-width: 82%" in stylesheet
 
 
 def test_job_creation_and_token_authorisation(client: TestClient) -> None:

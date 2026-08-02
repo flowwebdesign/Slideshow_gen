@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +24,13 @@ from app.worker import RenderWorker
 
 
 BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger("slideshow")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+logger.propagate = False
 
 
 def create_app(app_config: AppConfig | None = None, *, start_services: bool = True) -> FastAPI:
@@ -40,6 +48,7 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
             cleanup.start()
             for queued in repository.list_states({JobState.QUEUED}):
                 worker.submit(queued.id)
+            logger.info("application_ready queued_jobs_resubmitted")
         yield
         cleanup.stop()
         worker.shutdown()
@@ -59,6 +68,10 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
     @application.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request=request, name="index.html")
+
+    @application.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
 
     @application.post("/api/jobs", status_code=202)
     async def create_job(
@@ -100,16 +113,23 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
                 decoded_format(target)
                 await upload.close()
             repository.create(job_id, token_digest(token), parsed, len(files))
-        except HTTPException:
+        except HTTPException as exc:
             shutil.rmtree(job_dir, ignore_errors=True)
+            logger.warning("job_upload_rejected job_id=%s status=%s", job_id, exc.status_code)
             raise
         except ValueError as exc:
             shutil.rmtree(job_dir, ignore_errors=True)
+            logger.warning("job_upload_rejected job_id=%s status=415", job_id)
             raise HTTPException(415, str(exc)) from exc
         except Exception as exc:
             shutil.rmtree(job_dir, ignore_errors=True)
+            logger.exception("job_upload_failed job_id=%s", job_id)
             raise HTTPException(500, "The photos could not be saved") from exc
 
+        logger.info(
+            "job_queued job_id=%s photos=%s aspect=%s style=%s duration=%s",
+            job_id, len(files), parsed.aspect_ratio, parsed.style, parsed.duration,
+        )
         if start_services:
             worker.submit(job_id)
         response = JSONResponse(

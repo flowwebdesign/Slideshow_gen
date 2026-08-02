@@ -137,10 +137,11 @@ def prepare_photo(
     else:
         canvas = Image.new("RGB", frame_size, "black")
     fitted = photo.resize(aspect_fit(photo.size, frame_size), Image.Resampling.LANCZOS)
+    fitted = fitted.filter(ImageFilter.UnsharpMask(radius=1.1, percent=65, threshold=3))
     canvas.paste(fitted, ((frame_width - fitted.width) // 2, (frame_height - fitted.height) // 2))
     _draw_text_panel(canvas, caption, text_position, font)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(output_path, "JPEG", quality=92, optimize=True)
+    canvas.save(output_path, "PNG", compress_level=2)
     return PreparedImage(output_path, frame_width, frame_height)
 
 
@@ -156,5 +157,5 @@ def create_title_card(output_path: Path, frame_size: tuple[int, int], settings: 
         combined = f"{combined}\n{settings.subtitle}" if combined else settings.subtitle
     _draw_text_panel(canvas, combined, TextPosition.CENTRE, settings.font, size_multiplier=1.25)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(output_path, "JPEG", quality=94)
+    canvas.save(output_path, "PNG", compress_level=2)
     return PreparedImage(output_path, width, height)
