@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.main import recover_interrupted_jobs
 from app.models import JobState
 from app.security import safe_job_path
 from tests.conftest import heif_bytes, image_bytes, valid_settings
@@ -169,6 +170,36 @@ def test_resilient_upload_reports_empty_and_unauthorised_uploads(client: TestCli
     )
     assert incomplete.status_code == 409
     assert "None of the selected photos" in incomplete.json()["detail"]
+
+
+def test_restart_requeues_interrupted_render_and_removes_partial_outputs(
+    client: TestClient, application,
+) -> None:
+    started = client.post(
+        "/api/uploads",
+        json={"photo_count": 1, "settings": json.loads(valid_settings(1, title_mode="hidden"))},
+    ).json()
+    headers = {"X-Job-Token": started["access_token"]}
+    received = client.post(
+        f"/api/uploads/{started['job_id']}/files/0", headers=headers,
+        files={"file": ("photo.jpg", image_bytes(), "image/jpeg")},
+    )
+    assert received.status_code == 200
+    assert client.post(f"/api/uploads/{started['job_id']}/complete", headers=headers).status_code == 202
+    application.state.repository.transition(started["job_id"], JobState.PREPARING, 35)
+    job_dir = application.state.config.jobs_dir / started["job_id"]
+    (job_dir / "prepared").mkdir()
+    (job_dir / "render").mkdir()
+    (job_dir / "output.mp4").write_bytes(b"partial")
+
+    assert recover_interrupted_jobs(application.state.config, application.state.repository) == 1
+    recovered = application.state.repository.get(started["job_id"])
+    assert recovered.state == JobState.QUEUED
+    assert recovered.progress == 5
+    assert (job_dir / "source" / "000.upload").is_file()
+    assert not (job_dir / "prepared").exists()
+    assert not (job_dir / "render").exists()
+    assert not (job_dir / "output.mp4").exists()
 
 
 def test_resilient_upload_skips_one_bad_photo_and_compacts_settings(

@@ -60,6 +60,32 @@ def file_signature(path: Path, length: int = 24) -> str:
         return "unavailable"
 
 
+def recover_interrupted_jobs(app_config: AppConfig, repository: JobRepository) -> int:
+    recovered = 0
+    interrupted_jobs = repository.list_states({JobState.PREPARING, JobState.RENDERING})
+    for job in interrupted_jobs:
+        job_dir = safe_job_path(app_config.jobs_dir, job.id)
+        source_dir = job_dir / "source"
+        source_count = sum(
+            (source_dir / f"{index:03d}.upload").is_file()
+            for index in range(job.photo_count)
+        )
+        if source_count == job.photo_count:
+            shutil.rmtree(job_dir / "prepared", ignore_errors=True)
+            shutil.rmtree(job_dir / "render", ignore_errors=True)
+            (job_dir / "output.mp4").unlink(missing_ok=True)
+            repository.requeue_interrupted(job.id)
+            recovered += 1
+            logger.warning("job_requeued_after_restart job_id=%s", job.id)
+            continue
+        repository.transition(
+            job.id, JobState.FAILED, 100,
+            "Rendering was interrupted and the source photos are no longer available. Please create the slideshow again.",
+        )
+        logger.error("job_failed_after_restart job_id=%s missing_sources=%s", job.id, job.photo_count - source_count)
+    return recovered
+
+
 def health_report(app_config: AppConfig) -> tuple[bool, dict[str, bool | int]]:
     try:
         free_bytes = shutil.disk_usage(app_config.data_dir).free
@@ -93,6 +119,7 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
     async def lifespan(_: FastAPI):
         if start_services:
             cleanup.run_once()
+            recover_interrupted_jobs(settings_config, repository)
             cleanup.start()
             for queued in repository.list_states({JobState.QUEUED}):
                 worker.submit(queued.id)
@@ -445,7 +472,10 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
     ) -> dict[str, object]:
         cookie_token = request.cookies.get(f"slideshow_{job_id}")
         job = authorised_job(job_id, x_job_token, cookie_token)
-        return {"job_id": job.id, "state": job.state, "progress": job.progress, "error": job.error}
+        return {
+            "job_id": job.id, "state": job.state, "progress": job.progress,
+            "error": job.error, "updated_at": job.updated_at.isoformat(),
+        }
 
     @application.get("/api/jobs/{job_id}/preview")
     async def preview(

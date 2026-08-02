@@ -17,6 +17,7 @@ class AppConfig(BaseSettings):
     max_video_seconds: int = Field(20 * 60, ge=1)
     render_workers: int = Field(1, ge=1, le=4)
     ffmpeg_timeout_seconds: int = Field(1800, ge=5)
+    ffmpeg_stall_timeout_seconds: int = Field(180, ge=30)
     min_free_bytes: int = Field(1024 * 1024 * 1024, ge=0)
     cleanup_interval_seconds: int = Field(60, ge=1)
     ffmpeg_binary: str = "ffmpeg"

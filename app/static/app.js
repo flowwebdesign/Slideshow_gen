@@ -534,6 +534,8 @@
 
   function pollJob(jobId, token = "") {
     let networkFailures = 0;
+    let lastReportedState = "";
+    let lastReportedProgress = -1;
     const poll = async () => {
       try {
         const headers = token ? { "X-Job-Token": token } : {};
@@ -544,8 +546,28 @@
           throw new Error(data.detail || data.error || "Could not check the slideshow");
         }
         networkFailures = 0;
-        const messages = { queued: "Waiting for the video maker", preparing: "Preparing your photos", rendering: "Creating the video", ready: "Finished", downloaded: "Finished" };
-        setProgress(data.progress, messages[data.state] || "Working");
+        if (data.state !== lastReportedState || data.progress !== lastReportedProgress) {
+          diagnostic(
+            `Job state=${data.state}; progress=${data.progress}%; server updated=${data.updated_at || "unknown"}`,
+          );
+          lastReportedState = data.state;
+          lastReportedProgress = data.progress;
+        }
+        const messages = {
+          queued: "Waiting for the video maker",
+          preparing: "Preparing your photos",
+          ready: "Finished",
+          downloaded: "Finished",
+        };
+        let progressText = messages[data.state] || "Working";
+        if (data.state === "rendering") {
+          progressText = data.progress >= 99
+            ? "Final checks — almost ready"
+            : data.progress >= 95
+              ? "Finishing the video"
+              : "Creating the video";
+        }
+        setProgress(data.progress, progressText);
         if (data.state === "ready" || data.state === "downloaded") {
           progressPanel.hidden = true;
           resultPanel.hidden = false;

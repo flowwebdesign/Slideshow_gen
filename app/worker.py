@@ -11,7 +11,7 @@ from app.config import AppConfig
 from app.image_processing import create_title_card, create_title_overlay, prepare_photo
 from app.jobs import JobRepository
 from app.models import JobState, RESOLUTIONS, TitleMode
-from app.renderer import build_ffmpeg_args, run_ffmpeg
+from app.renderer import build_ffmpeg_args, estimated_video_duration, run_ffmpeg
 from app.security import safe_job_path
 
 
@@ -41,15 +41,6 @@ class RenderWorker:
         finally:
             with self._lock:
                 self._submitted.discard(job_id)
-
-    def _estimate_render_progress(self, job_id: str, stop: threading.Event) -> None:
-        progress = 55
-        while not stop.wait(2):
-            current = self.repository.get(job_id)
-            if current is None or current.state != JobState.RENDERING:
-                return
-            self.repository.set_progress(job_id, progress)
-            progress = min(90, progress + 5)
 
     def render(self, job_id: str) -> None:
         job_dir = safe_job_path(self.config.jobs_dir, job_id)
@@ -96,17 +87,27 @@ class RenderWorker:
                 self.config.ffmpeg_binary, prepared_paths, output_path, job.settings,
                 frame_size, title_card=title_card, title_overlay_path=title_overlay_path,
             )
-            progress_stop = threading.Event()
-            progress_thread = threading.Thread(
-                target=self._estimate_render_progress, args=(job_id, progress_stop),
-                name=f"render-progress-{job_id}", daemon=True,
+            expected_seconds = max(
+                0.001,
+                estimated_video_duration(
+                    job.settings, len(prepared_paths), title_card=title_card,
+                ),
             )
-            progress_thread.start()
-            try:
-                run_ffmpeg(args, self.config.ffmpeg_timeout_seconds)
-            finally:
-                progress_stop.set()
-                progress_thread.join(timeout=3)
+            reported_progress = 49
+
+            def report_render_progress(encoded_seconds: float) -> None:
+                nonlocal reported_progress
+                percentage = min(98, 50 + round(48 * encoded_seconds / expected_seconds))
+                if percentage > reported_progress:
+                    reported_progress = percentage
+                    self.repository.set_progress(job_id, percentage)
+
+            run_ffmpeg(
+                args, self.config.ffmpeg_timeout_seconds,
+                progress_callback=report_render_progress,
+                stall_timeout_seconds=self.config.ffmpeg_stall_timeout_seconds,
+            )
+            self.repository.set_progress(job_id, 99)
             if not output_path.is_file() or output_path.stat().st_size == 0:
                 raise RuntimeError("video renderer did not create an output file")
             shutil.rmtree(source_dir, ignore_errors=True)

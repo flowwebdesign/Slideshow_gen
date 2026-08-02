@@ -103,6 +103,24 @@ class JobRepository:
                 (max(0, min(100, progress)), now_utc().isoformat(), job_id),
             )
 
+    def requeue_interrupted(self, job_id: str) -> JobRecord:
+        current = self.get(job_id)
+        if current is None:
+            raise KeyError(job_id)
+        if current.state not in {JobState.PREPARING, JobState.RENDERING}:
+            raise ValueError("only an interrupted render can be requeued")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE jobs SET state=?, progress=?, error=NULL, updated_at=?
+                   WHERE id=? AND state=?""",
+                (JobState.QUEUED, 5, now_utc().isoformat(), job_id, current.state),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("job changed concurrently")
+        updated = self.get(job_id)
+        assert updated is not None
+        return updated
+
     def update_upload_details(
         self, job_id: str, settings: SlideshowSettings, photo_count: int,
     ) -> JobRecord:

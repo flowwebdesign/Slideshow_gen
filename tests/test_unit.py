@@ -20,7 +20,10 @@ from app.jobs import JobRepository
 from app.models import (
     Background, FontPreset, JobState, SlideshowSettings, TextPosition, TitleMode, now_utc,
 )
-from app.renderer import build_ffmpeg_args, escape_drawtext, run_ffmpeg
+from app.renderer import (
+    build_ffmpeg_args, escape_drawtext, estimated_video_duration, parse_ffmpeg_progress,
+    run_ffmpeg,
+)
 from app.security import (
     generate_access_token, generate_job_id, safe_job_path, token_digest, token_matches,
 )
@@ -96,6 +99,19 @@ def test_state_transitions(tmp_path: Path) -> None:
     assert repository.transition(job_id, JobState.DOWNLOADED, 100).downloaded_at is not None
     with pytest.raises(ValueError):
         repository.transition(job_id, JobState.READY, 100)
+
+
+def test_interrupted_render_can_be_requeued_atomically(tmp_path: Path) -> None:
+    repository = JobRepository(tmp_path / "jobs.sqlite3")
+    repository.initialise()
+    job_id, token = generate_job_id(), generate_access_token()
+    repository.create(job_id, token_digest(token), settings(), 1)
+    repository.transition(job_id, JobState.PREPARING, 20)
+    recovered = repository.requeue_interrupted(job_id)
+    assert recovered.state == JobState.QUEUED
+    assert recovered.progress == 5
+    with pytest.raises(ValueError):
+        repository.requeue_interrupted(job_id)
 
 
 def test_expiry_decisions() -> None:
@@ -342,3 +358,24 @@ def test_ffmpeg_invocation_uses_shell_false(monkeypatch: pytest.MonkeyPatch) -> 
     run_ffmpeg(["ffmpeg", "-version"], 5)
     assert captured["shell"] is False
     assert captured["timeout"] == 5
+
+
+def test_ffmpeg_progress_parser_and_duration_estimate() -> None:
+    assert parse_ffmpeg_progress("out_time_us=2500000") == 2.5
+    assert parse_ffmpeg_progress("out_time_ms=1250000") == 1.25
+    assert parse_ffmpeg_progress("progress=continue") is None
+    no_transition = settings(style="custom", transition="none", duration=5)
+    assert estimated_video_duration(no_transition, 3) == 15
+    fading = settings(style="custom", transition="fade", duration=5)
+    assert estimated_video_duration(fading, 3) == 13.5
+
+
+def test_ffmpeg_stall_watchdog_terminates_silent_process(tmp_path: Path) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text("#!/bin/sh\nsleep 2\n", encoding="utf-8")
+    fake_ffmpeg.chmod(0o755)
+    with pytest.raises(RuntimeError, match="stopped making progress"):
+        run_ffmpeg(
+            [str(fake_ffmpeg)], 5, progress_callback=lambda _seconds: None,
+            stall_timeout_seconds=0.1,
+        )

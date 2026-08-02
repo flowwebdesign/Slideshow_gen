@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import queue
 import subprocess
+import threading
+import time
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from app.models import Movement, SlideshowSettings, TextAnimation, Transition
 
@@ -146,15 +149,126 @@ def build_ffmpeg_args(
     return args
 
 
-def run_ffmpeg(args: list[str], timeout_seconds: int) -> None:
+def estimated_video_duration(
+    settings: SlideshowSettings, image_count: int, *, title_card: bool = False,
+) -> float:
+    durations = [
+        settings.title_duration if title_card and index == 0 else settings.duration
+        for index in range(image_count)
+    ]
+    if not durations:
+        return 0
+    elapsed = durations[0]
+    transition_duration = (
+        0.55 if settings.style.value == "celebration"
+        else 1.2 if settings.style.value == "classic"
+        else 0.75
+    )
+    for index in range(1, image_count):
+        transition = _transition_for(settings, index - 1)
+        if transition == Transition.NONE:
+            elapsed += durations[index]
+        else:
+            overlap = min(transition_duration, durations[index - 1] / 2, durations[index] / 2)
+            elapsed += durations[index] - overlap
+    return elapsed
+
+
+def parse_ffmpeg_progress(line: str) -> float | None:
+    key, separator, value = line.strip().partition("=")
+    if not separator or key not in {"out_time_us", "out_time_ms"}:
+        return None
     try:
-        subprocess.run(
-            args, shell=False, check=True, timeout=timeout_seconds,
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("video rendering timed out") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or "").strip().splitlines()
-        summary = " | ".join(detail)[:900] if detail else "unknown FFmpeg error"
-        raise RuntimeError(f"video rendering failed: {summary}") from exc
+        return max(0, int(value) / 1_000_000)
+    except ValueError:
+        return None
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def run_ffmpeg(
+    args: list[str], timeout_seconds: int, *,
+    progress_callback: Callable[[float], None] | None = None,
+    stall_timeout_seconds: float | None = None,
+) -> None:
+    if progress_callback is None:
+        try:
+            subprocess.run(
+                args, shell=False, check=True, timeout=timeout_seconds,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("video rendering timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip().splitlines()
+            summary = " | ".join(detail)[:900] if detail else "unknown FFmpeg error"
+            raise RuntimeError(f"video rendering failed: {summary}") from exc
+        return
+
+    command = [args[0], "-progress", "pipe:1", "-nostats", *args[1:]]
+    process = subprocess.Popen(
+        command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    messages: queue.Queue[str | None] = queue.Queue()
+
+    def read_progress() -> None:
+        try:
+            for line in process.stdout:
+                messages.put(line)
+        finally:
+            messages.put(None)
+
+    reader = threading.Thread(target=read_progress, name="ffmpeg-progress", daemon=True)
+    reader.start()
+    started = last_activity = time.monotonic()
+    last_progress_seconds = -1.0
+    reader_finished = False
+    try:
+        while not reader_finished:
+            now = time.monotonic()
+            if now - started > timeout_seconds:
+                _terminate_process(process)
+                raise RuntimeError("video rendering timed out")
+            if stall_timeout_seconds and now - last_activity > stall_timeout_seconds:
+                _terminate_process(process)
+                raise RuntimeError(
+                    "video rendering stopped making progress; please try again"
+                )
+            try:
+                message = messages.get(timeout=0.5)
+            except queue.Empty:
+                if process.poll() is not None:
+                    reader_finished = True
+                continue
+            if message is None:
+                reader_finished = True
+                continue
+            seconds = parse_ffmpeg_progress(message)
+            if seconds is not None and seconds > last_progress_seconds:
+                last_progress_seconds = seconds
+                last_activity = time.monotonic()
+                progress_callback(seconds)
+        try:
+            return_code = process.wait(timeout=5)
+        except subprocess.TimeoutExpired as exc:
+            _terminate_process(process)
+            raise RuntimeError("video rendering did not finish cleanly") from exc
+        error_output = process.stderr.read()
+        if return_code != 0:
+            detail = error_output.strip().splitlines()
+            summary = " | ".join(detail)[:900] if detail else "unknown FFmpeg error"
+            raise RuntimeError(f"video rendering failed: {summary}")
+    finally:
+        if process.poll() is None:
+            _terminate_process(process)
+        reader.join(timeout=2)
