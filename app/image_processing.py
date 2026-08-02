@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+import os
+import warnings
+from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, UnidentifiedImageError
-from pillow_heif import register_heif_opener
+from PIL import (
+    Image, ImageCms, ImageDraw, ImageFilter, ImageFont, ImageOps, UnidentifiedImageError,
+)
+from pillow_heif import libheif_info, register_heif_opener
 
 from app.models import Background, FontPreset, SlideshowSettings, TextAlign, TextPosition
 
 
-register_heif_opener()
+register_heif_opener(thumbnails=False)
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
-ALLOWED_DECODED_FORMATS = {"JPEG", "PNG", "WEBP", "HEIF", "HEIC"}
+ALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif",
+    ".hif", ".avif", ".tif", ".tiff", ".dng", ".gif", ".bmp", ".mpo",
+    ".j2k", ".jp2", ".jpf", ".jpx",
+}
+MAX_DECODED_PIXELS = 80_000_000
+NORMALIZED_JPEG_QUALITY = 92
 
 FONT_MAP: dict[FontPreset, tuple[str, int]] = {
     FontPreset.MODERN: ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 52),
@@ -32,20 +42,138 @@ class PreparedImage:
     height: int
 
 
+@dataclass(frozen=True)
+class NormalizedImage:
+    source_format: str
+    width: int
+    height: int
+    frame_count: int
+
+
+class ImageNormalizationError(ValueError):
+    def __init__(self, message: str, *, code: str, detected_format: str = "UNKNOWN"):
+        super().__init__(message)
+        self.code = code
+        self.detected_format = detected_format
+
+
 def has_allowed_extension(filename: str | None) -> bool:
     return bool(filename and Path(filename).suffix.lower() in ALLOWED_EXTENSIONS)
 
 
-def decoded_format(path: Path) -> str:
+def _validate_dimensions(image: Image.Image, max_pixels: int) -> None:
+    width, height = image.size
+    if width < 1 or height < 1 or width * height > max_pixels:
+        raise ImageNormalizationError(
+            f"decoded image exceeds the {max_pixels:,}-pixel safety limit",
+            code="image_too_large", detected_format=(image.format or "UNKNOWN").upper(),
+        )
+
+
+def decoded_format(path: Path, *, max_pixels: int = MAX_DECODED_PIXELS) -> str:
+    detected = "UNKNOWN"
     try:
-        with Image.open(path) as image:
-            image.load()
-            value = (image.format or "").upper()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise ValueError("file is not a valid supported image") from exc
-    if value not in ALLOWED_DECODED_FORMATS:
-        raise ValueError("decoded image format is not supported")
-    return value
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(path) as image:
+                detected = (image.format or "UNKNOWN").upper()
+                _validate_dimensions(image, max_pixels)
+                image.seek(0)
+                image.load()
+    except ImageNormalizationError:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ImageNormalizationError(
+            f"decoded image exceeds the {max_pixels:,}-pixel safety limit",
+            code="image_too_large", detected_format=detected,
+        ) from exc
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise ImageNormalizationError(
+            "photo data could not be decoded as a supported still image",
+            code="invalid_image", detected_format=detected,
+        ) from exc
+    return detected
+
+
+def _to_srgb(image: Image.Image) -> Image.Image:
+    has_alpha = image.mode in {"RGBA", "LA"} or (
+        image.mode == "P" and "transparency" in image.info
+    )
+    alpha = image.convert("RGBA").getchannel("A") if has_alpha else None
+    rgb = image.convert("RGB")
+    profile_bytes = image.info.get("icc_profile")
+    if isinstance(profile_bytes, bytes) and profile_bytes:
+        try:
+            rgb = ImageCms.profileToProfile(
+                rgb, ImageCms.ImageCmsProfile(BytesIO(profile_bytes)),
+                ImageCms.createProfile("sRGB"), outputMode="RGB",
+            )
+        except (ImageCms.PyCMSError, OSError, TypeError, ValueError):
+            # A malformed optional colour profile must not make a decodable photo unusable.
+            pass
+    if alpha is not None:
+        background = Image.new("RGB", rgb.size, "black")
+        background.paste(rgb, (0, 0), alpha)
+        return background
+    return rgb
+
+
+def normalize_image(
+    source_path: Path, output_path: Path, *, max_pixels: int = MAX_DECODED_PIXELS,
+) -> NormalizedImage:
+    """Decode one untrusted still image and atomically store a canonical sRGB JPEG."""
+    temporary = output_path.with_name(f".{output_path.name}.normalizing")
+    temporary.unlink(missing_ok=True)
+    detected = "UNKNOWN"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(source_path) as opened:
+                detected = (opened.format or "UNKNOWN").upper()
+                _validate_dimensions(opened, max_pixels)
+                frame_count = int(getattr(opened, "n_frames", 1))
+                # Pillow and pillow-heif expose the primary/main still as frame zero.
+                opened.seek(0)
+                opened.load()
+                oriented = ImageOps.exif_transpose(opened)
+                _validate_dimensions(oriented, max_pixels)
+                normalized = _to_srgb(oriented)
+                width, height = normalized.size
+                normalized.save(
+                    temporary, "JPEG", quality=NORMALIZED_JPEG_QUALITY,
+                    subsampling=0, optimize=False,
+                )
+        with Image.open(temporary) as check:
+            check.load()
+            if check.format != "JPEG" or check.mode != "RGB":
+                raise OSError("canonical image verification failed")
+        os.replace(temporary, output_path)
+        return NormalizedImage(detected, width, height, frame_count)
+    except ImageNormalizationError:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ImageNormalizationError(
+            f"decoded image exceeds the {max_pixels:,}-pixel safety limit",
+            code="image_too_large", detected_format=detected,
+        ) from exc
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise ImageNormalizationError(
+            "photo data could not be decoded as a supported still image",
+            code="invalid_image", detected_format=detected,
+        ) from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def heif_decoder_available() -> bool:
+    try:
+        decoders = libheif_info().get("decoders", {})
+    except Exception:
+        return False
+    return any(
+        "hevc" in f"{name} {description}".lower() or "de265" in f"{name} {description}".lower()
+        for name, description in decoders.items()
+    )
 
 
 def aspect_fit(source: tuple[int, int], target: tuple[int, int]) -> tuple[int, int]:

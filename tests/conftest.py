@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import base64
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,11 @@ def image_bytes(size: tuple[int, int] = (160, 100), color: tuple[int, int, int] 
     buffer = io.BytesIO()
     Image.new("RGB", size, color).save(buffer, fmt)
     return buffer.getvalue()
+
+
+def heif_bytes() -> bytes:
+    fixture = Path(__file__).parent / "fixtures" / "RGB_8__29x100.heif.b64"
+    return base64.b64decode(fixture.read_text(encoding="ascii"))
 
 
 def valid_settings(count: int, **updates: object) -> str:

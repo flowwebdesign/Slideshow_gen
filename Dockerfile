@@ -18,6 +18,8 @@ COPY tests ./tests
 COPY README.md DEPLOYMENT_NEXT.md Makefile ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
+RUN python -c "from app.image_processing import heif_decoder_available; assert heif_decoder_available(), 'HEIC/HEIF decoder unavailable'"
+
 RUN addgroup --system --gid 10001 slideshow \
     && adduser --system --uid 10001 --ingroup slideshow --home /app slideshow \
     && mkdir -p /data/jobs \

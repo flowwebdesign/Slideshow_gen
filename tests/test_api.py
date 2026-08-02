@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.models import JobState
 from app.security import safe_job_path
-from tests.conftest import image_bytes, valid_settings
+from tests.conftest import heif_bytes, image_bytes, valid_settings
 
 
 def create(client: TestClient, count: int = 1, settings: str | None = None):
@@ -83,7 +85,76 @@ def test_resilient_upload_session_accepts_files_separately(client: TestClient, a
     assert application.state.repository.get(upload["job_id"]).state == JobState.QUEUED
 
 
-def test_resilient_upload_reports_missing_and_unauthorised_files(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("image_format", "filename", "content_type"),
+    [("JPEG", "ordinary.jpg", "image/jpeg"), ("PNG", "photo.png", "image/png"),
+     ("WEBP", "photo.webp", "image/webp")],
+)
+def test_staged_upload_normalises_existing_formats(
+    client: TestClient, application, image_format: str, filename: str, content_type: str,
+) -> None:
+    started = client.post(
+        "/api/uploads",
+        json={"photo_count": 1, "settings": json.loads(valid_settings(1, title_mode="hidden"))},
+    ).json()
+    response = client.post(
+        f"/api/uploads/{started['job_id']}/files/0",
+        headers={"X-Job-Token": started["access_token"]},
+        files={"file": (filename, image_bytes(fmt=image_format), content_type)},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "received"
+    assert response.json()["detected_format"] == image_format
+    stored = application.state.config.jobs_dir / started["job_id"] / "source" / "000.upload"
+    with Image.open(stored) as normalized:
+        assert normalized.format == "JPEG"
+        assert normalized.mode == "RGB"
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence",
+        "application/octet-stream", "",
+    ],
+)
+def test_real_heif_content_succeeds_independent_of_client_mime(
+    client: TestClient, application, content_type: str,
+) -> None:
+    started = client.post(
+        "/api/uploads",
+        json={"photo_count": 1, "settings": json.loads(valid_settings(1, title_mode="hidden"))},
+    ).json()
+    response = client.post(
+        f"/api/uploads/{started['job_id']}/files/0",
+        headers={"X-Job-Token": started["access_token"]},
+        files={"file": ("fixture.heic", heif_bytes(), content_type)},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "received"
+    assert response.json()["detected_format"] in {"HEIF", "HEIC"}
+    stored = application.state.config.jobs_dir / started["job_id"] / "source" / "000.upload"
+    with Image.open(stored) as normalized:
+        assert normalized.format == "JPEG"
+        assert normalized.size == (29, 100)
+
+
+def test_heif_content_named_jpg_is_detected_from_bytes(client: TestClient) -> None:
+    started = client.post(
+        "/api/uploads",
+        json={"photo_count": 1, "settings": json.loads(valid_settings(1, title_mode="hidden"))},
+    ).json()
+    response = client.post(
+        f"/api/uploads/{started['job_id']}/files/0",
+        headers={"X-Job-Token": started["access_token"]},
+        files={"file": ("mislabelled.jpg", heif_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "received"
+    assert response.json()["detected_format"] in {"HEIF", "HEIC"}
+
+
+def test_resilient_upload_reports_empty_and_unauthorised_uploads(client: TestClient) -> None:
     started = client.post(
         "/api/uploads",
         json={"photo_count": 1, "settings": json.loads(valid_settings(1, title_mode="hidden"))},
@@ -97,7 +168,78 @@ def test_resilient_upload_reports_missing_and_unauthorised_files(client: TestCli
         f"{url}/complete", headers={"X-Job-Token": started["access_token"]},
     )
     assert incomplete.status_code == 409
-    assert "1 photos are missing" in incomplete.json()["detail"]
+    assert "None of the selected photos" in incomplete.json()["detail"]
+
+
+def test_resilient_upload_skips_one_bad_photo_and_compacts_settings(
+    client: TestClient, application,
+) -> None:
+    raw_settings = json.loads(valid_settings(
+        3, title="iPhone memories", title_mode="overlay", title_photo_index=1,
+        duration=5, title_duration=2, rotations=[0, 90, 180],
+        captions=["first", "unsupported", "third"],
+    ))
+    started = client.post(
+        "/api/uploads", json={"photo_count": 3, "settings": raw_settings},
+    )
+    assert started.status_code == 201, started.text
+    upload = started.json()
+    headers = {"X-Job-Token": upload["access_token"]}
+    first = client.post(
+        f"/api/uploads/{upload['job_id']}/files/0", headers=headers,
+        files={"file": ("first.jpg", image_bytes(), "image/jpeg")},
+    )
+    rejected = client.post(
+        f"/api/uploads/{upload['job_id']}/files/1", headers=headers,
+        files={"file": ("IMG_0005.heic", b"not a decodable photo", "image/heic")},
+    )
+    third = client.post(
+        f"/api/uploads/{upload['job_id']}/files/2", headers=headers,
+        files={"file": ("third.jpg", image_bytes(color=(30, 90, 160)), "image/jpeg")},
+    )
+    assert first.status_code == third.status_code == 200
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "skipped"
+    assert rejected.json()["error"]["code"] == "invalid_image"
+    assert rejected.json()["error"]["detected_format"] == "UNKNOWN"
+    assert rejected.json()["filename"] == "IMG_0005.heic"
+    assert "remaining photos will continue uploading" in rejected.json()["reason"]
+
+    completed = client.post(
+        f"/api/uploads/{upload['job_id']}/complete", headers=headers,
+    )
+    assert completed.status_code == 202, completed.text
+    assert completed.json()["skipped_photos"] == 1
+    assert completed.json()["accepted_photos"] == 2
+    assert completed.json()["failed_photos"] == 1
+    job = application.state.repository.get(upload["job_id"])
+    assert job.photo_count == 2
+    assert job.settings.rotations == [0, 180]
+    assert job.settings.captions == ["first", "third"]
+    assert job.settings.title_photo_index == 0
+    source = application.state.config.jobs_dir / upload["job_id"] / "source"
+    assert sorted(path.name for path in source.iterdir()) == ["000.upload", "001.upload"]
+
+
+def test_batch_with_no_decodable_photos_fails_clearly_and_cleans_incoming_file(
+    client: TestClient, application,
+) -> None:
+    started = client.post(
+        "/api/uploads",
+        json={"photo_count": 1, "settings": json.loads(valid_settings(1, title_mode="hidden"))},
+    ).json()
+    headers = {"X-Job-Token": started["access_token"]}
+    rejected = client.post(
+        f"/api/uploads/{started['job_id']}/files/0", headers=headers,
+        files={"file": ("broken.heic", b"invalid", "application/octet-stream")},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "skipped"
+    source = application.state.config.jobs_dir / started["job_id"] / "source"
+    assert list(source.iterdir()) == []
+    completed = client.post(f"/api/uploads/{started['job_id']}/complete", headers=headers)
+    assert completed.status_code == 409
+    assert completed.json()["detail"] == "None of the selected photos could be decoded"
 
 
 def test_resilient_upload_supports_100_photos_without_one_large_request(client: TestClient, application) -> None:
@@ -143,6 +285,13 @@ def test_health_endpoint_reports_missing_ffmpeg(client: TestClient, monkeypatch)
     assert response.status_code == 503
     assert response.json()["status"] == "degraded"
     assert response.json()["checks"]["ffmpeg_available"] is False
+
+
+def test_health_endpoint_reports_missing_heif_decoder(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr("app.main.heif_decoder_available", lambda: False)
+    response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["checks"]["heif_decoder_available"] is False
 
 
 def test_stylesheet_contains_phone_layout(client: TestClient) -> None:

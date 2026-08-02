@@ -13,6 +13,7 @@ class AppConfig(BaseSettings):
     max_photos: int = Field(100, ge=1, le=100)
     max_photo_bytes: int = Field(20 * 1024 * 1024, ge=1024)
     max_total_bytes: int = Field(500 * 1024 * 1024, ge=1024)
+    max_decoded_pixels: int = Field(80_000_000, ge=1_000_000)
     max_video_seconds: int = Field(20 * 60, ge=1)
     render_workers: int = Field(1, ge=1, le=4)
     ffmpeg_timeout_seconds: int = Field(1800, ge=5)

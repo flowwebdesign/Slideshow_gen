@@ -103,6 +103,29 @@ class JobRepository:
                 (max(0, min(100, progress)), now_utc().isoformat(), job_id),
             )
 
+    def update_upload_details(
+        self, job_id: str, settings: SlideshowSettings, photo_count: int,
+    ) -> JobRecord:
+        current = self.get(job_id)
+        if current is None:
+            raise KeyError(job_id)
+        if current.state != JobState.UPLOADING:
+            raise ValueError("only an active upload can be updated")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE jobs SET settings=?, photo_count=?, updated_at=?
+                   WHERE id=? AND state=?""",
+                (
+                    settings.model_dump_json(), photo_count, now_utc().isoformat(),
+                    job_id, JobState.UPLOADING,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("job changed concurrently")
+        updated = self.get(job_id)
+        assert updated is not None
+        return updated
+
     def delete(self, job_id: str) -> None:
         with self._connect() as connection:
             connection.execute("DELETE FROM jobs WHERE id=?", (job_id,))

@@ -119,6 +119,7 @@ summary { min-height: 54px; display: flex; align-items: center; color: var(--bra
 .video-estimate { margin: 22px 0 0; padding: 14px 16px; border-radius: 10px; color: #244a75; background: var(--soft); font-weight: 800; }
 .message { margin: 16px 0; padding: 15px 18px; border-radius: 10px; }
 .error { color: var(--danger); background: #fff0f0; border: 1px solid #edbdbd; }
+.warning { color: #684b00; background: #fff7d8; border: 1px solid #e7cf78; }
 .create-button { width: 100%; min-height: 64px; display: flex; align-items: center; justify-content: center; padding: 14px 22px; border: 0; border-radius: 13px; color: white; background: var(--brand); font: 800 1.25rem/1.2 inherit; text-decoration: none; cursor: pointer; box-shadow: 0 7px 18px rgba(24, 88, 168, .25); }
 .create-button:hover { background: var(--brand-dark); }
 .create-button:disabled { cursor: not-allowed; background: #9aa7b8; box-shadow: none; }

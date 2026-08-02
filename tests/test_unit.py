@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import struct
+import zlib
 from datetime import timedelta
 from pathlib import Path
 
@@ -11,8 +13,8 @@ from pydantic import ValidationError
 from app.cleanup import cleanup_decision
 from app.config import AppConfig
 from app.image_processing import (
-    aspect_fill, aspect_fit, create_title_overlay, decoded_format, has_allowed_extension,
-    orient_and_rotate, prepare_photo,
+    ImageNormalizationError, aspect_fill, aspect_fit, create_title_overlay, decoded_format,
+    has_allowed_extension, normalize_image, orient_and_rotate, prepare_photo,
 )
 from app.jobs import JobRepository
 from app.models import (
@@ -35,10 +37,16 @@ def test_configuration_validation_rejects_root() -> None:
         AppConfig(data_dir=Path("/"))
 
 
-@pytest.mark.parametrize("name", ["x.jpg", "x.JPEG", "x.png", "x.webp", "x.heic", "x.heif"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "x.jpg", "x.JPEG", "x.png", "x.webp", "x.heic", "x.heif", "x.avif",
+        "x.tif", "x.tiff", "x.dng", "x.gif", "x.bmp", "x.mpo", "x.hif", "x.jp2",
+    ],
+)
 def test_allowed_extensions(name: str) -> None:
     assert has_allowed_extension(name)
-    assert not has_allowed_extension("photo.gif")
+    assert not has_allowed_extension("photo.mov")
     assert not has_allowed_extension("../photo")
 
 
@@ -50,6 +58,13 @@ def test_decoded_formats_and_malformed_file(tmp_path: Path) -> None:
     invalid.write_bytes(b"not an image")
     with pytest.raises(ValueError):
         decoded_format(invalid)
+
+
+@pytest.mark.parametrize("image_format", ["TIFF", "GIF", "BMP", "AVIF"])
+def test_additional_decoded_photo_formats(tmp_path: Path, image_format: str) -> None:
+    image = tmp_path / f"image-{image_format.lower()}.upload"
+    Image.new("RGB", (12, 8), "blue").save(image, image_format)
+    assert decoded_format(image) == image_format
 
 
 def test_random_ids_tokens_and_hash_comparison() -> None:
@@ -123,6 +138,60 @@ def test_exif_orientation_and_rotation(tmp_path: Path) -> None:
     rotated = orient_and_rotate(Image.new("RGB", (60, 30)), 90)
     assert rotated.size == (30, 60)
     assert rotated.mode == "RGB"
+
+
+def test_normalisation_applies_exif_orientation_and_writes_srgb_jpeg(tmp_path: Path) -> None:
+    source = tmp_path / "portrait.data"
+    output = tmp_path / "portrait.upload"
+    photo = Image.new("RGB", (40, 20), "blue")
+    exif = photo.getexif()
+    exif[274] = 6
+    photo.save(source, "JPEG", exif=exif)
+
+    result = normalize_image(source, output)
+
+    assert result.source_format == "JPEG"
+    assert result.width == 20 and result.height == 40
+    with Image.open(output) as normalized:
+        assert normalized.format == "JPEG"
+        assert normalized.mode == "RGB"
+        assert normalized.size == (20, 40)
+        assert normalized.getexif().get(274) is None
+
+
+def test_normalisation_rejects_excessive_pixels_without_temporary_residue(tmp_path: Path) -> None:
+    source = tmp_path / "huge.png"
+    output = tmp_path / "huge.upload"
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    source.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 10_000, 10_000, 8, 2, 0, 0, 0))
+        + chunk(b"IEND", b"")
+    )
+    with pytest.raises(ImageNormalizationError, match="pixel safety limit") as problem:
+        normalize_image(source, output, max_pixels=80_000_000)
+    assert problem.value.code == "image_too_large"
+    assert not output.exists()
+    assert not (tmp_path / ".huge.upload.normalizing").exists()
+
+
+def test_normalisation_removes_temporary_file_after_success_and_invalid_input(tmp_path: Path) -> None:
+    source = tmp_path / "photo.bin"
+    output = tmp_path / "photo.upload"
+    Image.new("RGBA", (12, 8), (255, 0, 0, 100)).save(source, "PNG")
+    normalize_image(source, output)
+    assert output.is_file()
+    assert not (tmp_path / ".photo.upload.normalizing").exists()
+
+    invalid_output = tmp_path / "invalid.upload"
+    source.write_bytes(b"not an image")
+    with pytest.raises(ImageNormalizationError):
+        normalize_image(source, invalid_output)
+    assert not invalid_output.exists()
+    assert not (tmp_path / ".invalid.upload.normalizing").exists()
 
 
 @pytest.mark.parametrize("duration", [0, 20.1, -1])

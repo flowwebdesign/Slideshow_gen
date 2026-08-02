@@ -13,7 +13,7 @@ from app.cleanup import CleanupService
 from app.jobs import JobRepository
 from app.models import JobState, now_utc
 from app.security import safe_job_path
-from tests.conftest import image_bytes, valid_settings
+from tests.conftest import heif_bytes, image_bytes, valid_settings
 
 
 pytestmark = pytest.mark.integration
@@ -114,6 +114,58 @@ def test_failed_ffmpeg_marks_failed_and_removes_sources(
     assert not (job_dir / "source").exists()
     assert not (job_dir / "prepared").exists()
     assert not (job_dir / "output.mp4").exists()
+
+
+def test_real_render_continues_after_one_undecodable_photo(
+    client: TestClient, application,
+) -> None:
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg is required")
+    started = client.post(
+        "/api/uploads",
+        json={
+            "photo_count": 4,
+            "settings": json.loads(valid_settings(
+                4, title="", title_mode="hidden", duration=1,
+                style="custom", transition="none",
+            )),
+        },
+    )
+    assert started.status_code == 201, started.text
+    upload = started.json()
+    headers = {"X-Job-Token": upload["access_token"]}
+    files = [
+        ("first.jpg", image_bytes((160, 100), (180, 60, 40)), "image/jpeg"),
+        ("fixture.heic", heif_bytes(), "image/heic"),
+        ("broken.heic", b"not a decodable image", "application/octet-stream"),
+        ("after-corrupt.jpg", image_bytes((100, 160), (40, 130, 180)), "image/jpeg"),
+    ]
+    responses = [
+        client.post(
+            f"/api/uploads/{upload['job_id']}/files/{index}", headers=headers,
+            files={"file": (filename, content, content_type)},
+        )
+        for index, (filename, content, content_type) in enumerate(files)
+    ]
+    assert [response.status_code for response in responses] == [200, 200, 200, 200]
+    assert responses[0].json()["status"] == "received"
+    assert responses[1].json()["detected_format"] in {"HEIF", "HEIC"}
+    assert responses[2].json()["status"] == "skipped"
+    assert responses[3].json()["status"] == "received"
+    completed = client.post(
+        f"/api/uploads/{upload['job_id']}/complete", headers=headers,
+    )
+    assert completed.status_code == 202
+    assert completed.json()["skipped_photos"] == 1
+    assert completed.json()["accepted_photos"] == 3
+    assert completed.json()["failed_photos"] == 1
+
+    application.state.worker.render(upload["job_id"])
+    job = application.state.repository.get(upload["job_id"])
+    output = safe_job_path(application.state.config.jobs_dir, upload["job_id"]) / "output.mp4"
+    assert job.state == JobState.READY, job.error
+    assert job.photo_count == 3
+    assert output.is_file() and output.stat().st_size > 10_000
 
 
 def test_abandoned_job_cleanup_survives_repository_restart(client: TestClient, application) -> None:

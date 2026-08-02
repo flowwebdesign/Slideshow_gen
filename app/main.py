@@ -19,7 +19,9 @@ from pydantic import ValidationError
 
 from app.cleanup import CleanupService
 from app.config import AppConfig, config
-from app.image_processing import FONT_MAP, decoded_format, has_allowed_extension
+from app.image_processing import (
+    FONT_MAP, ImageNormalizationError, heif_decoder_available, normalize_image,
+)
 from app.jobs import JobRepository
 from app.models import FontPreset, JobRecord, JobState, SlideshowSettings
 from app.security import generate_access_token, generate_job_id, safe_job_path, token_digest, token_matches
@@ -36,6 +38,28 @@ if not logger.handlers:
 logger.propagate = False
 
 
+def safe_client_filename(filename: str | None, index: int) -> str:
+    basename = (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    cleaned = "".join(character for character in basename if character.isprintable()).strip()
+    return cleaned[:120] or f"photo-{index + 1}"
+
+
+def safe_log_value(value: str | None, fallback: str = "none") -> str:
+    cleaned = "".join(
+        character for character in (value or "")
+        if character.isascii() and (character.isalnum() or character in " .+-_/;:,()")
+    )
+    return cleaned[:120] or fallback
+
+
+def file_signature(path: Path, length: int = 24) -> str:
+    try:
+        with path.open("rb") as stream:
+            return stream.read(length).hex() or "empty"
+    except OSError:
+        return "unavailable"
+
+
 def health_report(app_config: AppConfig) -> tuple[bool, dict[str, bool | int]]:
     try:
         free_bytes = shutil.disk_usage(app_config.data_dir).free
@@ -43,12 +67,14 @@ def health_report(app_config: AppConfig) -> tuple[bool, dict[str, bool | int]]:
         free_bytes = 0
     checks: dict[str, bool | int] = {
         "ffmpeg_available": shutil.which(app_config.ffmpeg_binary) is not None,
+        "heif_decoder_available": heif_decoder_available(),
         "storage_writable": app_config.data_dir.is_dir() and os.access(app_config.data_dir, os.W_OK),
         "free_disk_bytes": free_bytes,
         "disk_space_available": free_bytes >= app_config.min_free_bytes,
     }
     healthy = bool(
         checks["ffmpeg_available"]
+        and checks["heif_decoder_available"]
         and checks["storage_writable"]
         and checks["disk_space_available"]
     )
@@ -181,26 +207,30 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
         job_id: str, index: int, request: Request,
         file: Annotated[UploadFile, File()],
         x_job_token: Annotated[str | None, Header()] = None,
-    ) -> dict[str, object]:
+    ) -> JSONResponse:
         started = time.monotonic()
         job = authorised_job(job_id, x_job_token, None)
         if job.state != JobState.UPLOADING:
             raise HTTPException(409, "This upload is no longer accepting photos")
         if index < 0 or index >= job.photo_count:
             raise HTTPException(422, "Photo number is outside this upload")
-        if not has_allowed_extension(file.filename):
-            raise HTTPException(415, "Only JPEG, PNG, WebP, HEIC, and HEIF photos are accepted")
         source_dir = safe_job_path(settings_config.jobs_dir, job_id) / "source"
         target = source_dir / f"{index:03d}.upload"
+        incoming = source_dir / f".{index:03d}.incoming"
+        display_name = safe_client_filename(file.filename, index)
+        extension = safe_log_value(Path(display_name).suffix.lower(), "none")
+        content_type = safe_log_value(file.content_type, "blank")
         if target.is_file():
-            return {
+            await file.close()
+            return JSONResponse(content={
                 "status": "already_received", "index": index,
                 "bytes": target.stat().st_size, "request_id": request.state.request_id,
-            }
+            })
         existing_total = sum(path.stat().st_size for path in source_dir.glob("*.upload"))
         received = 0
+        incoming.unlink(missing_ok=True)
         try:
-            with target.open("xb") as destination:
+            with incoming.open("xb") as destination:
                 while chunk := await file.read(1024 * 1024):
                     received += len(chunk)
                     if received > settings_config.max_photo_bytes:
@@ -208,25 +238,54 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
                     if existing_total + received > settings_config.max_total_bytes:
                         raise HTTPException(413, "The selected photos are larger than 500 MB in total")
                     destination.write(chunk)
-            decoded_format(target)
+            normalized = normalize_image(
+                incoming, target, max_pixels=settings_config.max_decoded_pixels,
+            )
         except HTTPException:
-            target.unlink(missing_ok=True)
             raise
-        except ValueError as exc:
-            target.unlink(missing_ok=True)
-            raise HTTPException(415, str(exc)) from exc
+        except ImageNormalizationError as exc:
+            reason = (
+                f"Photo {index + 1} ({display_name}) could not be read and was skipped. "
+                "The remaining photos will continue uploading."
+            )
+            logger.warning(
+                "upload_file_rejected job_id=%s request_id=%s photo=%s/%s bytes=%s "
+                "extension=%s content_type=%s signature=%s detected_format=%s code=%s detail=%s",
+                job_id, request.state.request_id, index + 1, job.photo_count, received,
+                extension, content_type, file_signature(incoming),
+                safe_log_value(exc.detected_format, "unknown"), exc.code,
+                safe_log_value(str(exc)),
+            )
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "skipped", "index": index, "reason": reason,
+                    "filename": display_name,
+                    "error": {
+                        "code": exc.code, "detail": str(exc),
+                        "detected_format": exc.detected_format,
+                    },
+                    "request_id": request.state.request_id,
+                },
+            )
         finally:
+            incoming.unlink(missing_ok=True)
             await file.close()
         repository.set_progress(job_id, min(4, round((index + 1) / job.photo_count * 4)))
         logger.info(
-            "upload_file_received job_id=%s request_id=%s photo=%s/%s bytes=%s elapsed_ms=%s",
+            "upload_file_received job_id=%s request_id=%s photo=%s/%s bytes=%s "
+            "extension=%s content_type=%s detected_format=%s normalized_bytes=%s "
+            "dimensions=%sx%s frames=%s elapsed_ms=%s",
             job_id, request.state.request_id, index + 1, job.photo_count, received,
+            extension, content_type, normalized.source_format, target.stat().st_size,
+            normalized.width, normalized.height, normalized.frame_count,
             round((time.monotonic() - started) * 1000),
         )
-        return {
+        return JSONResponse(content={
             "status": "received", "index": index, "bytes": received,
+            "detected_format": normalized.source_format,
             "request_id": request.state.request_id,
-        }
+        })
 
     @application.post("/api/uploads/{job_id}/complete")
     async def complete_upload(
@@ -237,19 +296,47 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
         if job.state != JobState.UPLOADING:
             raise HTTPException(409, "This upload has already been completed")
         source_dir = safe_job_path(settings_config.jobs_dir, job_id) / "source"
-        missing = [index for index in range(job.photo_count) if not (source_dir / f"{index:03d}.upload").is_file()]
-        if missing:
-            raise HTTPException(409, f"Upload is incomplete; {len(missing)} photos are missing")
+        received_indices = [
+            index for index in range(job.photo_count)
+            if (source_dir / f"{index:03d}.upload").is_file()
+        ]
+        if not received_indices:
+            raise HTTPException(409, "None of the selected photos could be decoded")
+        skipped_photos = job.photo_count - len(received_indices)
+        if skipped_photos:
+            temporary_paths: list[Path] = []
+            for compact_index, original_index in enumerate(received_indices):
+                temporary = source_dir / f".{compact_index:03d}.compact"
+                os.replace(source_dir / f"{original_index:03d}.upload", temporary)
+                temporary_paths.append(temporary)
+            for compact_index, temporary in enumerate(temporary_paths):
+                os.replace(temporary, source_dir / f"{compact_index:03d}.upload")
+            index_map = {original: compact for compact, original in enumerate(received_indices)}
+            title_original = job.settings.title_photo_index
+            replacement_original = min(
+                received_indices, key=lambda original: abs(original - title_original),
+            )
+            compact_settings = job.settings.model_copy(update={
+                "rotations": [job.settings.rotations[index] for index in received_indices],
+                "captions": [job.settings.captions[index] for index in received_indices],
+                "title_photo_index": index_map[replacement_original],
+            })
+            compact_settings.validate_for_count(len(received_indices), settings_config.max_video_seconds)
+            job = repository.update_upload_details(job_id, compact_settings, len(received_indices))
         repository.transition(job_id, JobState.QUEUED, 5)
         if start_services:
             worker.submit(job_id)
         logger.info(
-            "upload_completed job_id=%s request_id=%s photos=%s",
-            job_id, request.state.request_id, job.photo_count,
+            "upload_completed job_id=%s request_id=%s photos=%s skipped=%s",
+            job_id, request.state.request_id, job.photo_count, skipped_photos,
         )
         response = JSONResponse(
             status_code=202,
-            content={"job_id": job_id, "access_token": x_job_token, "state": JobState.QUEUED},
+            content={
+                "job_id": job_id, "access_token": x_job_token,
+                "state": JobState.QUEUED, "skipped_photos": skipped_photos,
+                "accepted_photos": job.photo_count, "failed_photos": skipped_photos,
+            },
         )
         response.set_cookie(
             key=f"slideshow_{job_id}", value=x_job_token or "", httponly=True,
@@ -282,11 +369,10 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
         total_bytes = 0
         try:
             for index, upload in enumerate(files):
-                if not has_allowed_extension(upload.filename):
-                    raise HTTPException(415, "Only JPEG, PNG, WebP, HEIC, and HEIF photos are accepted")
                 target = source_dir / f"{index:03d}.upload"
+                incoming = source_dir / f".{index:03d}.incoming"
                 file_bytes = 0
-                with target.open("xb") as destination:
+                with incoming.open("xb") as destination:
                     while chunk := await upload.read(1024 * 1024):
                         file_bytes += len(chunk)
                         total_bytes += len(chunk)
@@ -295,14 +381,18 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
                         if total_bytes > settings_config.max_total_bytes:
                             raise HTTPException(413, "The total upload is larger than 500 MB")
                         destination.write(chunk)
-                decoded_format(target)
-                await upload.close()
+                try:
+                    normalize_image(
+                        incoming, target, max_pixels=settings_config.max_decoded_pixels,
+                    )
+                finally:
+                    incoming.unlink(missing_ok=True)
             repository.create(job_id, token_digest(token), parsed, len(files))
         except HTTPException as exc:
             shutil.rmtree(job_dir, ignore_errors=True)
             logger.warning("job_upload_rejected job_id=%s status=%s", job_id, exc.status_code)
             raise
-        except ValueError as exc:
+        except ImageNormalizationError as exc:
             shutil.rmtree(job_dir, ignore_errors=True)
             logger.warning("job_upload_rejected job_id=%s status=415", job_id)
             raise HTTPException(415, str(exc)) from exc
@@ -310,6 +400,9 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
             shutil.rmtree(job_dir, ignore_errors=True)
             logger.exception("job_upload_failed job_id=%s", job_id)
             raise HTTPException(500, "The photos could not be saved") from exc
+        finally:
+            for upload in files:
+                await upload.close()
 
         logger.info(
             "job_queued job_id=%s photos=%s aspect=%s style=%s duration=%s",

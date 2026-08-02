@@ -35,7 +35,7 @@
   <main class="shell">
     <form id="slideshow-form" novalidate>
       <section class="panel" aria-labelledby="photos-heading">
-        <div class="step-heading"><span>1</span><div><h2 id="photos-heading">Choose your photos</h2><p>Up to 100 photos. JPEG, PNG, WebP, HEIC, or HEIF.</p></div></div>
+        <div class="step-heading"><span>1</span><div><h2 id="photos-heading">Choose your photos</h2><p>Up to 100 photos, including iPhone HEIC, JPEG, PNG, WebP, AVIF, TIFF, GIF, or BMP.</p></div></div>
         <div class="upload-zone" id="upload-zone">
           <button id="choose-photos" class="upload-picker" type="button">
             <span class="upload-icon" aria-hidden="true">＋</span>
@@ -43,7 +43,7 @@
           </button>
           <span>or drop photos here from your computer</span>
         </div>
-        <input id="photo-input" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple>
+        <input id="photo-input" type="file" accept="image/*,.heic,.heif,.hif,.avif,.dng,.tif,.tiff" multiple>
         <p class="privacy">Your photos are used only to create this slideshow. Original photos are deleted after processing. The completed video is automatically deleted within one hour.</p>
         <details id="upload-diagnostics" class="upload-diagnostics">
           <summary>Upload help &amp; diagnostics</summary>
@@ -256,6 +256,7 @@
     <section id="result-panel" class="panel result-panel" hidden>
       <p class="success-mark" aria-hidden="true">✓</p>
       <h2>Your slideshow is ready</h2>
+      <div id="skipped-warning" class="message warning" role="status" hidden></div>
       <video id="video-preview" controls playsinline preload="metadata"></video>
       <div id="preview-error" class="message error" role="alert" hidden></div>
       <button id="fullscreen-button" class="secondary-button" type="button">View video full screen</button>

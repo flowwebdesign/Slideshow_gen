@@ -4,7 +4,6 @@
   const MAX_PHOTO_BYTES = 20 * 1024 * 1024;
   const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
   const ACTIVE_JOB_KEY = "slideshowActiveJob";
-  const allowedExtensions = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif"]);
   const form = document.querySelector("#slideshow-form");
   const input = document.querySelector("#photo-input");
   const dropZone = document.querySelector("#upload-zone");
@@ -20,6 +19,7 @@
   const progressMessage = document.querySelector("#progress-message");
   const progressTrack = document.querySelector(".progress-track");
   const resultPanel = document.querySelector("#result-panel");
+  const skippedWarning = document.querySelector("#skipped-warning");
   const durationChoice = document.querySelector("#duration-choice");
   const customDurationLabel = document.querySelector("#custom-duration-label");
   const customDuration = document.querySelector("#custom-duration");
@@ -68,6 +68,7 @@
   let draggedIndex = null;
   let draggingTitle = false;
   let uploadDiagnostics = [];
+  let skippedPhotos = 0;
 
   function diagnostic(message) {
     const clock = new Date().toISOString().slice(11, 19);
@@ -124,8 +125,6 @@
     if (photos.length + files.length > MAX_PHOTOS) return "You can choose no more than 100 photos.";
     let total = photos.reduce((sum, photo) => sum + photo.file.size, 0);
     for (const file of files) {
-      const extension = file.name.split(".").pop().toLowerCase();
-      if (!allowedExtensions.has(extension)) return `${file.name} is not a supported photo type.`;
       if (file.size > MAX_PHOTO_BYTES) return `${file.name} is larger than 20 MB.`;
       total += file.size;
     }
@@ -550,6 +549,10 @@
         if (data.state === "ready" || data.state === "downloaded") {
           progressPanel.hidden = true;
           resultPanel.hidden = false;
+          skippedWarning.hidden = skippedPhotos === 0;
+          const acceptedPhotos = photos.length - skippedPhotos;
+          skippedWarning.textContent = `${acceptedPhotos} photo${acceptedPhotos === 1 ? "" : "s"} uploaded; `
+            + `${skippedPhotos} photo${skippedPhotos === 1 ? "" : "s"} could not be processed.`;
           const preview = document.querySelector("#video-preview");
           preview.src = `/api/jobs/${jobId}/preview`;
           preview.onerror = () => {
@@ -609,6 +612,7 @@
     progressPanel.hidden = false;
     progressPanel.scrollIntoView({ behavior: "smooth", block: "center" });
     beginDiagnostics();
+    skippedPhotos = 0;
     const totalBytes = photos.reduce((sum, photo) => sum + photo.file.size, 0);
     try {
       const startResponse = await fetch("/api/uploads", {
@@ -622,16 +626,44 @@
       reference.hidden = false;
       let uploadedBytes = 0;
       for (let index = 0; index < photos.length; index += 1) {
-        await uploadPhotoWithRetry(
-          upload.job_id, upload.access_token, photos[index], index, totalBytes, uploadedBytes,
-        );
+        try {
+          const received = await uploadPhotoWithRetry(
+            upload.job_id, upload.access_token, photos[index], index, totalBytes, uploadedBytes,
+          );
+          if (received.status === "skipped") {
+            skippedPhotos += 1;
+            const decoder = received.error?.detected_format || "unknown";
+            const code = received.error?.code || "invalid_image";
+            const detail = received.error?.detail || received.reason;
+            diagnostic(
+              `Photo ${index + 1} (${photos[index].file.name}) skipped; `
+              + `code=${code}; detected format=${decoder}; detail=${detail}`,
+            );
+            setProgress(
+              Math.max(1, (uploadedBytes + photos[index].file.size) / totalBytes * 10),
+              received.reason,
+            );
+          }
+        } catch (problem) {
+          if (problem.status !== 415) throw problem;
+          skippedPhotos += 1;
+          diagnostic(`Photo ${index + 1} skipped: ${problem.message}`);
+          setProgress(
+            Math.max(1, (uploadedBytes + photos[index].file.size) / totalBytes * 10),
+            `Photo ${index + 1} could not be decoded and was skipped`,
+          );
+        }
         uploadedBytes += photos[index].file.size;
       }
       const completeResponse = await fetch(`/api/uploads/${upload.job_id}/complete`, {
         method: "POST", headers: { "X-Job-Token": upload.access_token },
       });
-      await responseJson(completeResponse, "Complete upload");
-      diagnostic("All photos received; rendering started");
+      const completed = await responseJson(completeResponse, "Complete upload");
+      skippedPhotos = completed.skipped_photos ?? skippedPhotos;
+      const acceptedPhotos = completed.accepted_photos ?? photos.length - skippedPhotos;
+      diagnostic(
+        `${acceptedPhotos} photos accepted; ${completed.failed_photos ?? skippedPhotos} failed; rendering started`,
+      );
       setProgress(10, "Upload complete. Preparing your photos");
       rememberActiveJob(upload.job_id);
       pollJob(upload.job_id, upload.access_token);
@@ -669,6 +701,8 @@
     customDurationLabel.hidden = true;
     document.querySelector("#youtube-help").hidden = true;
     document.querySelector("#preview-error").hidden = true;
+    skippedWarning.hidden = true;
+    skippedPhotos = 0;
     document.querySelector("#job-reference").hidden = true;
     const preview = document.querySelector("#video-preview");
     preview.pause();
