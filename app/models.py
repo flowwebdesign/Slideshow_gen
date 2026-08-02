@@ -24,6 +24,11 @@ class AspectRatio(StrEnum):
     SQUARE = "1:1"
 
 
+class VideoQuality(StrEnum):
+    FULL_HD = "1080p"
+    UHD_4K = "4k"
+
+
 class Background(StrEnum):
     BLURRED = "blurred"
     BLACK = "black"
@@ -92,12 +97,23 @@ RESOLUTIONS = {
     AspectRatio.SQUARE: (1080, 1080),
 }
 
+UHD_RESOLUTIONS = {
+    AspectRatio.TV: (3840, 2160),
+    AspectRatio.PORTRAIT: (2160, 3840),
+    AspectRatio.SQUARE: (2160, 2160),
+}
+
+
+def resolution_for(aspect_ratio: AspectRatio, quality: VideoQuality) -> tuple[int, int]:
+    return UHD_RESOLUTIONS[aspect_ratio] if quality == VideoQuality.UHD_4K else RESOLUTIONS[aspect_ratio]
+
 
 class SlideshowSettings(BaseModel):
     title: str = Field("", max_length=120)
     subtitle: str = Field("", max_length=200)
     duration: float = Field(5, ge=1, le=20)
     aspect_ratio: AspectRatio = AspectRatio.TV
+    video_quality: VideoQuality = VideoQuality.FULL_HD
     background: Background = Background.BLURRED
     style: StylePreset = StylePreset.SMOOTH
     transition: Transition = Transition.FADE

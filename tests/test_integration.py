@@ -96,6 +96,30 @@ def test_real_render_http_download_and_expiry(client: TestClient, application) -
     assert restarted_repository.get(job_id).state == JobState.EXPIRED
 
 
+def test_real_4k_render_uses_ultra_hd_frame(client: TestClient, application) -> None:
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("ffmpeg and ffprobe are required")
+    response = client.post(
+        "/api/jobs",
+        files=[("files", ("photo.jpg", image_bytes((640, 480)), "image/jpeg"))],
+        data={"settings": valid_settings(
+            1, title="", title_mode="hidden", duration=1, video_quality="4k",
+            style="custom", transition="none", movement="static",
+        )},
+    )
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+    application.state.worker.render(job_id)
+    output = safe_job_path(application.state.config.jobs_dir, job_id) / "output.mp4"
+    job = application.state.repository.get(job_id)
+    assert job.state == JobState.READY, job.error
+    metadata = probe(output)
+    video = metadata["streams"][0]
+    assert video["codec_name"] == "h264"
+    assert (video["width"], video["height"]) == (3840, 2160)
+    assert video["pix_fmt"] == "yuv420p"
+
+
 def test_failed_ffmpeg_marks_failed_and_removes_sources(
     client: TestClient, application, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

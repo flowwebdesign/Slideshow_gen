@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from app.models import Movement, SlideshowSettings, TextAnimation, Transition
+from app.models import Movement, SlideshowSettings, TextAnimation, Transition, VideoQuality
 
 
 XFADE_MAP = {
@@ -138,10 +138,12 @@ def build_ffmpeg_args(
                 elapsed += durations[index] - overlap
             final_label = output_label
 
+    four_k = settings.video_quality == VideoQuality.UHD_4K
     args.extend([
         "-filter_complex", ";".join(filters), "-map", f"[{final_label}]", "-an",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-threads", "2",
-        "-profile:v", "high", "-level:v", "4.1", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "16" if four_k else "18",
+        "-threads", "2", "-profile:v", "high", "-level:v", "5.1" if four_k else "4.1",
+        "-pix_fmt", "yuv420p",
         "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
         "-color_range", "tv",
         "-r", "30", "-movflags", "+faststart", str(output_path),

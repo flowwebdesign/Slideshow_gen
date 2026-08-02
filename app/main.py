@@ -432,8 +432,9 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
                 await upload.close()
 
         logger.info(
-            "job_queued job_id=%s photos=%s aspect=%s style=%s duration=%s",
-            job_id, len(files), parsed.aspect_ratio, parsed.style, parsed.duration,
+            "job_queued job_id=%s photos=%s aspect=%s quality=%s style=%s duration=%s",
+            job_id, len(files), parsed.aspect_ratio, parsed.video_quality,
+            parsed.style, parsed.duration,
         )
         if start_services:
             worker.submit(job_id)

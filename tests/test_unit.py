@@ -18,7 +18,8 @@ from app.image_processing import (
 )
 from app.jobs import JobRepository
 from app.models import (
-    Background, FontPreset, JobState, SlideshowSettings, TextPosition, TitleMode, now_utc,
+    AspectRatio, Background, FontPreset, JobState, SlideshowSettings, TextPosition, TitleMode,
+    VideoQuality, now_utc, resolution_for,
 )
 from app.renderer import (
     build_ffmpeg_args, escape_drawtext, estimated_video_duration, parse_ffmpeg_progress,
@@ -140,6 +141,13 @@ def test_aspect_ratio_calculations_preserve_shape() -> None:
     assert aspect_fit((4000, 3000), (1920, 1080)) == (1440, 1080)
     assert aspect_fit((1000, 2000), (1920, 1080)) == (540, 1080)
     assert aspect_fill((1000, 2000), (1920, 1080)) == (1920, 3840)
+
+
+def test_video_quality_resolutions() -> None:
+    assert resolution_for(AspectRatio.TV, VideoQuality.FULL_HD) == (1920, 1080)
+    assert resolution_for(AspectRatio.TV, VideoQuality.UHD_4K) == (3840, 2160)
+    assert resolution_for(AspectRatio.PORTRAIT, VideoQuality.UHD_4K) == (2160, 3840)
+    assert resolution_for(AspectRatio.SQUARE, VideoQuality.UHD_4K) == (2160, 2160)
 
 
 def test_exif_orientation_and_rotation(tmp_path: Path) -> None:
@@ -278,6 +286,17 @@ def test_ffmpeg_argument_construction_has_safe_output(tmp_path: Path) -> None:
     assert args[args.index("-color_trc") + 1] == "bt709"
     assert "wipeleft" in joined and "1920:1080" in joined
     assert str(tmp_path / "output.mp4") == args[-1]
+
+
+def test_4k_ffmpeg_uses_higher_quality_compatible_profile(tmp_path: Path) -> None:
+    args = build_ffmpeg_args(
+        "ffmpeg", [tmp_path / "one.jpg"], tmp_path / "output.mp4",
+        settings(video_quality="4k"), (3840, 2160),
+    )
+    assert args[args.index("-crf") + 1] == "16"
+    assert args[args.index("-level:v") + 1] == "5.1"
+    filters = args[args.index("-filter_complex") + 1]
+    assert "scale=3840:2160" in filters
 
 
 def test_ffmpeg_title_overlay_is_timed_on_selected_photo(tmp_path: Path) -> None:

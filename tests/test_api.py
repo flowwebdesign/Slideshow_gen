@@ -29,6 +29,8 @@ def test_main_page_loads_and_is_responsive(client: TestClient) -> None:
     assert 'href="/static/styles.css"' in response.text
     assert 'src="/static/app.js"' in response.text
     assert 'id="video-estimate"' in response.text
+    assert 'id="video-quality"' in response.text
+    assert '<option value="4k" selected>' in response.text
     assert "Create another slideshow" in response.text
     assert 'id="menu-toggle"' in response.text
     assert 'id="settings-link"' in response.text

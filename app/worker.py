@@ -10,7 +10,7 @@ from pathlib import Path
 from app.config import AppConfig
 from app.image_processing import create_title_card, create_title_overlay, prepare_photo
 from app.jobs import JobRepository
-from app.models import JobState, RESOLUTIONS, TitleMode
+from app.models import JobState, TitleMode, resolution_for
 from app.renderer import build_ffmpeg_args, estimated_video_duration, run_ffmpeg
 from app.security import safe_job_path
 
@@ -54,7 +54,7 @@ class RenderWorker:
                 return
             logger.info("job_preparing job_id=%s photos=%s", job_id, job.photo_count)
             self.repository.transition(job_id, JobState.PREPARING, 15)
-            frame_size = RESOLUTIONS[job.settings.aspect_ratio]
+            frame_size = resolution_for(job.settings.aspect_ratio, job.settings.video_quality)
             prepared_paths: list[Path] = []
             has_title = bool(job.settings.title or job.settings.subtitle)
             title_card = has_title and job.settings.title_mode == TitleMode.CARD

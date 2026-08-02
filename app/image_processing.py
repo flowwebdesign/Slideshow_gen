@@ -22,7 +22,7 @@ ALLOWED_EXTENSIONS = {
     ".j2k", ".jp2", ".jpf", ".jpx",
 }
 MAX_DECODED_PIXELS = 80_000_000
-NORMALIZED_JPEG_QUALITY = 92
+NORMALIZED_JPEG_QUALITY = 95
 
 FONT_MAP: dict[FontPreset, tuple[str, int]] = {
     FontPreset.MODERN: ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 52),

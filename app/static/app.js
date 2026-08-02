@@ -29,6 +29,7 @@
   const advancedView = document.querySelector("#advanced-view");
   const viewDescription = document.querySelector("#view-description");
   const videoEstimate = document.querySelector("#video-estimate");
+  const videoQuality = document.querySelector("#video-quality");
   const titleMode = document.querySelector("#title-mode");
   const titlePhoto = document.querySelector("#title-photo");
   const titleStart = document.querySelector("#title-start");
@@ -323,7 +324,10 @@
     const hasTitle = (document.querySelector("#title").value.trim() || document.querySelector("#subtitle").value.trim())
       && titleMode.value !== "hidden";
     const seconds = photos.length * duration + (hasTitle && titleMode.value === "card" ? Number(titleDuration.value) : 0);
-    videoEstimate.textContent = `Estimated video length: ${formatDuration(seconds)}.`;
+    const qualityNote = videoQuality.value === "4k"
+      ? " 4K preserves more detail and will take longer to render."
+      : " Full HD renders faster and creates a smaller file.";
+    videoEstimate.textContent = `Estimated video length: ${formatDuration(seconds)}.${qualityNote}`;
   }
 
   input.addEventListener("change", () => addFiles(input.files));
@@ -336,6 +340,7 @@
     updateEstimate();
   });
   customDuration.addEventListener("input", updateEstimate);
+  videoQuality.addEventListener("change", updateEstimate);
   document.querySelector("#title").addEventListener("input", () => { updateEstimate(); updateAdvancedPreview(); });
   document.querySelector("#subtitle").addEventListener("input", () => { updateEstimate(); updateAdvancedPreview(); });
   [titleMode, titlePhoto, titleStart, titleDuration].forEach(element => element.addEventListener("input", () => {
@@ -420,6 +425,7 @@
       subtitle: document.querySelector("#subtitle").value,
       duration,
       aspect_ratio: document.querySelector("#aspect-ratio").value,
+      video_quality: videoQuality.value,
       background: document.querySelector("#background").value,
       style: style.value,
       transition: document.querySelector("#transition").value,
