@@ -407,6 +407,7 @@
 
   function setProgress(value, message) {
     const rounded = Math.max(0, Math.min(100, Math.round(value)));
+    progressPanel.style.setProperty("--rob-scale", String(0.88 + rounded * 0.004));
     progressBar.style.width = `${rounded}%`;
     progressNumber.textContent = `${rounded}%`;
     progressTrack.setAttribute("aria-valuenow", rounded);

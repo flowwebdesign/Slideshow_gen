@@ -123,6 +123,16 @@ summary { min-height: 54px; display: flex; align-items: center; color: var(--bra
 .create-button:hover { background: var(--brand-dark); }
 .create-button:disabled { cursor: not-allowed; background: #9aa7b8; box-shadow: none; }
 .result-panel { text-align: center; }
+.render-splash { --rob-scale: .88; position: fixed; z-index: 100; inset: 0; display: grid; min-height: 100dvh; overflow: hidden; padding: clamp(18px, 4vw, 48px); color: white; text-align: center; background: radial-gradient(circle at 50% 42%, #2b79be 0%, #124e89 34%, #071f3e 72%); isolation: isolate; }
+.splash-portrait { position: absolute; z-index: -1; inset: 0; display: grid; place-items: center; overflow: hidden; }
+.splash-glow { position: absolute; width: min(75vw, 780px); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(157, 218, 255, .32), rgba(61, 150, 216, .07) 48%, transparent 70%); filter: blur(8px); }
+.splash-portrait img { position: relative; width: auto; height: min(72vh, 720px); max-width: none; object-fit: contain; transform: scale(var(--rob-scale)); transform-origin: 50% 57%; filter: drop-shadow(0 24px 32px rgba(1, 15, 31, .38)); transition: transform 1.4s cubic-bezier(.2, .75, .25, 1); will-change: transform; }
+.splash-status { align-self: end; width: min(100%, 620px); margin-inline: auto; padding: clamp(18px, 4vw, 28px); border: 1px solid rgba(255, 255, 255, .2); border-radius: 18px; background: rgba(5, 27, 53, .76); box-shadow: 0 18px 50px rgba(1, 14, 29, .35); backdrop-filter: blur(16px); }
+.splash-status h2 { margin: 0; color: white; font-size: clamp(1.5rem, 5vw, 2.35rem); }
+.splash-status .eyebrow { margin-bottom: 7px; color: #b9dcff; }
+.splash-status #progress-message { margin: 8px 0 0; color: rgba(255, 255, 255, .86); }
+.splash-status .job-reference { color: rgba(255, 255, 255, .68); }
+.splash-status .progress-track { background: rgba(255, 255, 255, .18); }
 .progress-track { height: 20px; margin: 20px 0 8px; overflow: hidden; border-radius: 20px; background: #e4e9ef; }
 #progress-bar { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2871bf, #31a06d); transition: width .4s ease; }
 .success-mark { width: 64px; height: 64px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 50%; color: white; background: var(--success); font-size: 2rem; font-weight: 800; }
@@ -167,10 +177,16 @@ footer { padding: 22px 0 34px; color: var(--muted); text-align: center; font-siz
   .card-controls { grid-template-columns: repeat(2, 1fr); }
   .caption-label { padding-bottom: 10px; }
   .create-button { position: sticky; bottom: 8px; z-index: 3; }
+  .render-splash { padding: 12px; }
+  .splash-portrait img { height: min(68vh, 600px); }
+  .splash-status { padding: 18px 15px; border-radius: 15px; }
   .download-button { position: static; }
 }
 @media (max-width: 380px) {
   .photo-card { grid-template-columns: 1fr; }
   .photo-card img { min-height: 180px; max-height: 240px; }
 }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+  .splash-portrait img { transform: scale(1) !important; }
+}

@@ -32,6 +32,8 @@ def test_main_page_loads_and_is_responsive(client: TestClient) -> None:
     assert 'id="design-preview"' in response.text
     assert 'id="title-mode"' in response.text
     assert 'id="font"' in response.text
+    assert 'class="render-splash"' in response.text
+    assert '/static/rob-reader.png' in response.text
 
 
 def test_font_assets_are_allow_listed(client: TestClient) -> None:

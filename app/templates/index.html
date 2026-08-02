@@ -238,12 +238,19 @@
       <button id="create-button" class="create-button" type="submit" disabled>Create slideshow</button>
     </form>
 
-    <section id="progress-panel" class="panel result-panel" hidden aria-live="polite">
-      <h2 id="progress-title">Creating your slideshow…</h2>
-      <p id="progress-message">Uploading your photos</p>
-      <p id="job-reference" class="job-reference" hidden></p>
-      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div></div>
-      <strong id="progress-number">0%</strong>
+    <section id="progress-panel" class="render-splash" hidden aria-live="polite">
+      <div class="splash-portrait" aria-hidden="true">
+        <div class="splash-glow"></div>
+        <img src="/static/rob-reader.png" alt="">
+      </div>
+      <div class="splash-status">
+        <p class="eyebrow">The memories are developing</p>
+        <h2 id="progress-title">ROB is making your slideshow…</h2>
+        <p id="progress-message">Uploading your photos</p>
+        <p id="job-reference" class="job-reference" hidden></p>
+        <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div></div>
+        <strong id="progress-number">0%</strong>
+      </div>
     </section>
 
     <section id="result-panel" class="panel result-panel" hidden>
