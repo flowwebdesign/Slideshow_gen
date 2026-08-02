@@ -63,6 +63,7 @@ summary { min-height: 54px; display: flex; align-items: center; color: var(--bra
 .view-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-width: 430px; margin-bottom: 8px; padding: 5px; border-radius: 12px; background: #e7edf5; }
 .view-switch button { min-height: 50px; border: 0; border-radius: 9px; color: var(--ink); background: transparent; font: 800 1rem/1.2 inherit; cursor: pointer; }
 .view-switch button[aria-pressed="true"] { color: white; background: var(--brand); box-shadow: 0 3px 10px rgba(24, 88, 168, .22); }
+.video-estimate { margin: 22px 0 0; padding: 14px 16px; border-radius: 10px; color: #244a75; background: var(--soft); font-weight: 800; }
 .message { margin: 16px 0; padding: 15px 18px; border-radius: 10px; }
 .error { color: var(--danger); background: #fff0f0; border: 1px solid #edbdbd; }
 .create-button { width: 100%; min-height: 64px; display: flex; align-items: center; justify-content: center; padding: 14px 22px; border: 0; border-radius: 13px; color: white; background: var(--brand); font: 800 1.25rem/1.2 inherit; text-decoration: none; cursor: pointer; box-shadow: 0 7px 18px rgba(24, 88, 168, .25); }
@@ -76,6 +77,7 @@ video { width: 100%; max-height: 70vh; margin: 22px 0; border-radius: 12px; back
 .download-button { max-width: 540px; margin: auto; }
 .secondary-button { width: 100%; max-width: 540px; min-height: 56px; margin: 0 auto 12px; border: 2px solid var(--brand); border-radius: 12px; color: var(--brand); background: white; font: 800 1.08rem/1.2 inherit; cursor: pointer; }
 .secondary-button:hover { color: white; background: var(--brand); }
+.create-another-button { margin-top: 12px; }
 .job-reference { color: var(--muted); font-size: .88rem; }
 .youtube-help { margin-top: 28px; padding: 22px; text-align: left; border-radius: 12px; background: var(--soft); }
 .youtube-help h3 { margin-top: 0; }

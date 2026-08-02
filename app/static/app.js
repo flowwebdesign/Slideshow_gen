@@ -3,6 +3,7 @@
   const MAX_PHOTOS = 100;
   const MAX_PHOTO_BYTES = 20 * 1024 * 1024;
   const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
+  const ACTIVE_JOB_KEY = "slideshowActiveJob";
   const allowedExtensions = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif"]);
   const form = document.querySelector("#slideshow-form");
   const input = document.querySelector("#photo-input");
@@ -27,8 +28,26 @@
   const simpleView = document.querySelector("#simple-view");
   const advancedView = document.querySelector("#advanced-view");
   const viewDescription = document.querySelector("#view-description");
+  const videoEstimate = document.querySelector("#video-estimate");
   let photos = [];
   let draggedIndex = null;
+
+  function rememberActiveJob(jobId) {
+    try { window.localStorage.setItem(ACTIVE_JOB_KEY, jobId); } catch (_problem) { /* Recovery is best-effort. */ }
+  }
+
+  function clearActiveJob() {
+    try { window.localStorage.removeItem(ACTIVE_JOB_KEY); } catch (_problem) { /* Recovery is best-effort. */ }
+  }
+
+  function storedActiveJob() {
+    try {
+      const jobId = window.localStorage.getItem(ACTIVE_JOB_KEY) || "";
+      return /^[A-Za-z0-9_-]{22}$/.test(jobId) ? jobId : "";
+    } catch (_problem) {
+      return "";
+    }
+  }
 
   function showError(message) {
     error.textContent = message;
@@ -122,6 +141,35 @@
     count.textContent = `${photos.length} photo${photos.length === 1 ? "" : "s"} selected`;
     summary.hidden = photos.length === 0;
     submit.disabled = photos.length === 0;
+    updateEstimate();
+  }
+
+  function selectedDuration() {
+    return durationChoice.value === "custom" ? Number(customDuration.value) : Number(durationChoice.value);
+  }
+
+  function formatDuration(seconds) {
+    const rounded = Math.max(0, Math.ceil(seconds));
+    const minutes = Math.floor(rounded / 60);
+    const remainder = rounded % 60;
+    if (!minutes) return `${remainder} second${remainder === 1 ? "" : "s"}`;
+    if (!remainder) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+    return `${minutes} minute${minutes === 1 ? "" : "s"} ${remainder} seconds`;
+  }
+
+  function updateEstimate() {
+    if (!photos.length) {
+      videoEstimate.textContent = "Add photos to see the estimated video length.";
+      return;
+    }
+    const duration = selectedDuration();
+    if (!Number.isFinite(duration) || duration < 1 || duration > 20) {
+      videoEstimate.textContent = "Enter a photo time between 1 and 20 seconds.";
+      return;
+    }
+    const hasTitle = document.querySelector("#title").value.trim() || document.querySelector("#subtitle").value.trim();
+    const seconds = photos.length * duration + (hasTitle ? 3 : 0);
+    videoEstimate.textContent = `Estimated video length: ${formatDuration(seconds)}.`;
   }
 
   input.addEventListener("change", () => addFiles(input.files));
@@ -129,7 +177,13 @@
   ["dragenter", "dragover"].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.add("dragging"); }));
   ["dragleave", "drop"].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.remove("dragging"); }));
   dropZone.addEventListener("drop", event => addFiles(event.dataTransfer.files));
-  durationChoice.addEventListener("change", () => { customDurationLabel.hidden = durationChoice.value !== "custom"; });
+  durationChoice.addEventListener("change", () => {
+    customDurationLabel.hidden = durationChoice.value !== "custom";
+    updateEstimate();
+  });
+  customDuration.addEventListener("input", updateEstimate);
+  document.querySelector("#title").addEventListener("input", updateEstimate);
+  document.querySelector("#subtitle").addEventListener("input", updateEstimate);
   function setAdvancedView(enabled) {
     simpleView.setAttribute("aria-pressed", String(!enabled));
     advancedView.setAttribute("aria-pressed", String(enabled));
@@ -169,13 +223,17 @@
     };
   }
 
-  function pollJob(jobId, token) {
+  function pollJob(jobId, token = "") {
     let networkFailures = 0;
     const poll = async () => {
       try {
-        const response = await fetch(`/api/jobs/${jobId}/status`, { headers: { "X-Job-Token": token }, cache: "no-store" });
+        const headers = token ? { "X-Job-Token": token } : {};
+        const response = await fetch(`/api/jobs/${jobId}/status`, { headers, cache: "no-store" });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || data.error || "Could not check the slideshow");
+        if (!response.ok) {
+          if ([401, 403, 404].includes(response.status)) clearActiveJob();
+          throw new Error(data.detail || data.error || "Could not check the slideshow");
+        }
         networkFailures = 0;
         const messages = { queued: "Waiting for the video maker", preparing: "Preparing your photos", rendering: "Creating the video", ready: "Finished", downloaded: "Finished" };
         setProgress(data.progress, messages[data.state] || "Working");
@@ -184,18 +242,21 @@
           resultPanel.hidden = false;
           const preview = document.querySelector("#video-preview");
           preview.src = `/api/jobs/${jobId}/preview`;
-          preview.addEventListener("error", () => {
+          preview.onerror = () => {
             const previewError = document.querySelector("#preview-error");
             previewError.textContent = "The preview could not be loaded. Your video may have expired; try downloading it or create it again.";
             previewError.hidden = false;
-          }, { once: true });
+          };
           const download = document.querySelector("#download-button");
           download.href = `/api/jobs/${jobId}/download`;
-          download.addEventListener("click", () => { document.querySelector("#youtube-help").hidden = false; }, { once: true });
+          download.onclick = () => { document.querySelector("#youtube-help").hidden = false; };
           resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
           return;
         }
-        if (data.state === "failed" || data.state === "expired") throw new Error(data.error || "The slideshow could not be created. Please try again.");
+        if (data.state === "failed" || data.state === "expired") {
+          clearActiveJob();
+          throw new Error(data.error || "The slideshow could not be created. Please try again.");
+        }
         window.setTimeout(poll, 1000);
       } catch (problem) {
         networkFailures += 1;
@@ -243,6 +304,7 @@
       const reference = document.querySelector("#job-reference");
       reference.textContent = `Job reference: ${xhr.response.job_id}`;
       reference.hidden = false;
+      rememberActiveJob(xhr.response.job_id);
       pollJob(xhr.response.job_id, xhr.response.access_token);
     });
     xhr.addEventListener("error", () => { progressPanel.hidden = true; form.hidden = false; submit.disabled = false; showError("The upload was interrupted. Please try again."); });
@@ -267,4 +329,39 @@
       previewError.hidden = false;
     }
   });
+
+  document.querySelector("#create-another-button").addEventListener("click", () => {
+    clearActiveJob();
+    photos.forEach(photo => URL.revokeObjectURL(photo.url));
+    photos = [];
+    form.reset();
+    setAdvancedView(false);
+    customDurationLabel.hidden = true;
+    document.querySelector("#youtube-help").hidden = true;
+    document.querySelector("#preview-error").hidden = true;
+    document.querySelector("#job-reference").hidden = true;
+    const preview = document.querySelector("#video-preview");
+    preview.pause();
+    preview.removeAttribute("src");
+    preview.load();
+    resultPanel.hidden = true;
+    progressPanel.hidden = true;
+    form.hidden = false;
+    showError("");
+    renderPhotos();
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  const activeJobId = storedActiveJob();
+  if (activeJobId) {
+    form.hidden = true;
+    progressPanel.hidden = false;
+    const reference = document.querySelector("#job-reference");
+    reference.textContent = `Job reference: ${activeJobId}`;
+    reference.hidden = false;
+    setProgress(10, "Restoring your slideshow");
+    pollJob(activeJobId);
+  } else {
+    updateEstimate();
+  }
 })();

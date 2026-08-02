@@ -42,7 +42,7 @@ def app_config(tmp_path: Path) -> AppConfig:
     return AppConfig(
         data_dir=tmp_path / "data", max_photo_bytes=2 * 1024 * 1024,
         max_total_bytes=5 * 1024 * 1024, ffmpeg_timeout_seconds=120,
-        cleanup_interval_seconds=3600,
+        min_free_bytes=0, cleanup_interval_seconds=3600,
     )
 
 
@@ -55,4 +55,3 @@ def application(app_config: AppConfig):
 def client(application):
     with TestClient(application) as test_client:
         yield test_client
-

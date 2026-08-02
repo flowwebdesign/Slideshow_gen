@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ROB's Slideshow Generator</title>
-  <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml">
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="hero">
-    <img class="hero-art" src="{{ url_for('static', path='/rob-reader.png') }}" alt="" aria-hidden="true">
+    <img class="hero-art" src="/static/rob-reader.png" alt="" aria-hidden="true">
     <div class="shell">
       <div class="hero-copy">
         <p class="eyebrow">Simple · Private · Made for TV</p>
@@ -117,6 +117,7 @@
             </label>
           </div>
         </details>
+        <p id="video-estimate" class="video-estimate">Add photos to see the estimated video length.</p>
       </section>
 
       <div id="form-error" class="message error" role="alert" hidden></div>
@@ -138,6 +139,7 @@
       <div id="preview-error" class="message error" role="alert" hidden></div>
       <button id="fullscreen-button" class="secondary-button" type="button">View video full screen</button>
       <a id="download-button" class="create-button download-button" href="#">Download your video</a>
+      <button id="create-another-button" class="secondary-button create-another-button" type="button">Create another slideshow</button>
       <div id="youtube-help" class="youtube-help" hidden>
         <h3>Put your video on YouTube</h3>
         <ol>
@@ -150,6 +152,6 @@
     </section>
   </main>
   <footer><div class="shell">ROB's Slideshow Generator · Your files are temporary and private to this job.</div></footer>
-  <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+  <script src="/static/app.js" defer></script>
 </body>
 </html>

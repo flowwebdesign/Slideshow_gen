@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,6 +32,25 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
 logger.propagate = False
+
+
+def health_report(app_config: AppConfig) -> tuple[bool, dict[str, bool | int]]:
+    try:
+        free_bytes = shutil.disk_usage(app_config.data_dir).free
+    except OSError:
+        free_bytes = 0
+    checks: dict[str, bool | int] = {
+        "ffmpeg_available": shutil.which(app_config.ffmpeg_binary) is not None,
+        "storage_writable": app_config.data_dir.is_dir() and os.access(app_config.data_dir, os.W_OK),
+        "free_disk_bytes": free_bytes,
+        "disk_space_available": free_bytes >= app_config.min_free_bytes,
+    }
+    healthy = bool(
+        checks["ffmpeg_available"]
+        and checks["storage_writable"]
+        and checks["disk_space_available"]
+    )
+    return healthy, checks
 
 
 def create_app(app_config: AppConfig | None = None, *, start_services: bool = True) -> FastAPI:
@@ -70,8 +90,12 @@ def create_app(app_config: AppConfig | None = None, *, start_services: bool = Tr
         return templates.TemplateResponse(request=request, name="index.html")
 
     @application.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> JSONResponse:
+        healthy, checks = health_report(settings_config)
+        return JSONResponse(
+            status_code=200 if healthy else 503,
+            content={"status": "ok" if healthy else "degraded", "checks": checks},
+        )
 
     @application.post("/api/jobs", status_code=202)
     async def create_job(

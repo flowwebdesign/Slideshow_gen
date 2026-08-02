@@ -22,12 +22,29 @@ def test_main_page_loads_and_is_responsive(client: TestClient) -> None:
     assert "automatically deleted within one hour" in response.text
     assert "ROB's Slideshow Generator" in response.text
     assert "/static/rob-reader.png" in response.text
+    assert 'href="/static/styles.css"' in response.text
+    assert 'src="/static/app.js"' in response.text
+    assert 'id="video-estimate"' in response.text
+    assert "Create another slideshow" in response.text
 
 
-def test_health_endpoint(client: TestClient) -> None:
+def test_health_endpoint(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr("app.main.shutil.which", lambda _: "/usr/bin/ffmpeg")
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["checks"]["ffmpeg_available"] is True
+    assert data["checks"]["storage_writable"] is True
+    assert data["checks"]["disk_space_available"] is True
+
+
+def test_health_endpoint_reports_missing_ffmpeg(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr("app.main.shutil.which", lambda _: None)
+    response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert response.json()["checks"]["ffmpeg_available"] is False
 
 
 def test_stylesheet_contains_phone_layout(client: TestClient) -> None:
