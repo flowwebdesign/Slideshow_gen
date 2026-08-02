@@ -1,0 +1,18 @@
+services:
+  slideshow:
+    build: .
+    ports:
+      - "${SLIDESHOW_PORT:-8000}:8000"
+    environment:
+      SLIDESHOW_DATA_DIR: /data
+      SLIDESHOW_RENDER_WORKERS: "${SLIDESHOW_RENDER_WORKERS:-1}"
+      SLIDESHOW_FFMPEG_TIMEOUT_SECONDS: "${SLIDESHOW_FFMPEG_TIMEOUT_SECONDS:-1800}"
+    volumes:
+      - slideshow-data:/data
+    restart: unless-stopped
+    mem_limit: 3g
+    cpus: 2.0
+    pids_limit: 256
+
+volumes:
+  slideshow-data:

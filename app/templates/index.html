@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create a photo slideshow</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+  <header class="hero">
+    <div class="shell">
+      <p class="eyebrow">Photo Slideshow</p>
+      <h1>Turn your photos into a video</h1>
+      <p class="intro">Choose your photos, put them in order, and we’ll make a video ready for your television or YouTube.</p>
+    </div>
+  </header>
+
+  <main class="shell">
+    <form id="slideshow-form" novalidate>
+      <section class="panel" aria-labelledby="photos-heading">
+        <div class="step-heading"><span>1</span><div><h2 id="photos-heading">Choose your photos</h2><p>Up to 100 photos. JPEG, PNG, WebP, HEIC, or HEIF.</p></div></div>
+        <label class="upload-zone" id="upload-zone" for="photo-input">
+          <span class="upload-icon" aria-hidden="true">＋</span>
+          <strong>Tap here to choose photos</strong>
+          <span>or drop photos here from your computer</span>
+          <input id="photo-input" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple>
+        </label>
+        <p class="privacy">Your photos are used only to create this slideshow. Original photos are deleted after processing. The completed video is automatically deleted within one hour.</p>
+        <div id="photo-summary" class="photo-summary" hidden><strong id="photo-count"></strong><span>Drag photos, or use the arrow buttons, to change their order.</span></div>
+        <div id="photo-list" class="photo-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="words-heading">
+        <div class="step-heading"><span>2</span><div><h2 id="words-heading">Add a title <small>(optional)</small></h2><p>This appears as an opening card.</p></div></div>
+        <div class="field-grid two">
+          <label>Slideshow title <input id="title" type="text" maxlength="120" placeholder="Our family memories"></label>
+          <label>Subtitle <input id="subtitle" type="text" maxlength="200" placeholder="Summer 2026"></label>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="settings-heading">
+        <div class="step-heading"><span>3</span><div><h2 id="settings-heading">Choose the look</h2><p>The recommended choices are already selected.</p></div></div>
+        <div class="field-grid two">
+          <label>Time for each photo
+            <select id="duration-choice">
+              <option value="3">3 seconds</option>
+              <option value="5" selected>5 seconds</option>
+              <option value="8">8 seconds</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label id="custom-duration-label" hidden>Custom seconds (1–20)
+            <input id="custom-duration" type="number" min="1" max="20" step="0.5" value="5" inputmode="decimal">
+          </label>
+          <label>Video shape
+            <select id="aspect-ratio">
+              <option value="16:9" selected>16:9 television</option>
+              <option value="9:16">9:16 portrait</option>
+              <option value="1:1">1:1 square</option>
+            </select>
+          </label>
+          <label>Photo background
+            <select id="background">
+              <option value="blurred" selected>Blurred background</option>
+              <option value="black">Black background</option>
+            </select>
+          </label>
+          <label>Style
+            <select id="style">
+              <option value="simple">Simple</option>
+              <option value="smooth" selected>Smooth — recommended</option>
+              <option value="classic">Classic</option>
+              <option value="celebration">Celebration</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+        </div>
+
+        <details id="custom-settings">
+          <summary>Custom settings</summary>
+          <p class="hint">These transition and movement choices apply when the Custom style is selected.</p>
+          <div class="field-grid two">
+            <label>Transition
+              <select id="transition">
+                <option value="none">None</option><option value="fade" selected>Fade</option>
+                <option value="wipe-left">Wipe left</option><option value="slide-left">Slide left</option>
+                <option value="dissolve">Dissolve</option><option value="auto">Automatic mix</option>
+              </select>
+            </label>
+            <label>Photo movement
+              <select id="movement">
+                <option value="static">Static</option><option value="zoom-in" selected>Gentle zoom in</option>
+                <option value="zoom-out">Gentle zoom out</option><option value="auto">Automatic mix</option>
+              </select>
+            </label>
+            <label>Font style
+              <select id="font">
+                <option value="modern" selected>Modern</option><option value="classic">Classic</option>
+                <option value="friendly">Friendly</option><option value="large-tv">Large TV</option>
+              </select>
+            </label>
+            <label>Caption position
+              <select id="text-position">
+                <option value="top">Top</option><option value="centre">Centre</option><option value="bottom" selected>Bottom</option>
+              </select>
+            </label>
+          </div>
+        </details>
+      </section>
+
+      <div id="form-error" class="message error" role="alert" hidden></div>
+      <button id="create-button" class="create-button" type="submit" disabled>Create slideshow</button>
+    </form>
+
+    <section id="progress-panel" class="panel result-panel" hidden aria-live="polite">
+      <h2 id="progress-title">Creating your slideshow…</h2>
+      <p id="progress-message">Uploading your photos</p>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div></div>
+      <strong id="progress-number">0%</strong>
+    </section>
+
+    <section id="result-panel" class="panel result-panel" hidden>
+      <p class="success-mark" aria-hidden="true">✓</p>
+      <h2>Your slideshow is ready</h2>
+      <video id="video-preview" controls playsinline preload="metadata"></video>
+      <a id="download-button" class="create-button download-button" href="#">Download your video</a>
+      <div id="youtube-help" class="youtube-help" hidden>
+        <h3>Put your video on YouTube</h3>
+        <ol>
+          <li>Open YouTube and sign in.</li>
+          <li>Tap <strong>Create</strong>, then <strong>Upload a video</strong>.</li>
+          <li>Choose <strong>my-slideshow.mp4</strong> from your downloads.</li>
+          <li>Add a title, choose who can see it, and follow YouTube’s steps.</li>
+        </ol>
+      </div>
+    </section>
+  </main>
+  <footer><div class="shell">Local MVP · Your files are temporary and private to this job.</div></footer>
+  <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+</body>
+</html>
